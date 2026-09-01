@@ -167,7 +167,10 @@ _DAYTRADE_DEFAULTS: dict[str, str] = {
 
 
 def _get(env: Mapping[str, str], prefix: str, name: str, defaults: dict[str, str]) -> str:
-    return env.get(f"{_PREFIX}{prefix}{name}", defaults[name])
+    # .strip() guards against a stray trailing newline/whitespace from
+    # copy-pasting a value into a .env file or a CI secret — a common
+    # footgun that otherwise produces confusing downstream errors.
+    return env.get(f"{_PREFIX}{prefix}{name}", defaults[name]).strip()
 
 
 def _parse_int(raw: str, var_name: str) -> int:
