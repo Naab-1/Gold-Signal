@@ -15,7 +15,8 @@ def _candle(offset_hours, **overrides):
 
 def test_clean_candles_pass_through():
     candles = [_candle(i) for i in range(5)]
-    result = validate_candles(candles, Timeframe.H1, now=START + timedelta(hours=4))
+    # last candle (hour 4) closes at hour 5 — `now` must be at/after that
+    result = validate_candles(candles, Timeframe.H1, now=START + timedelta(hours=5))
     assert result.clean_candles == candles
     assert result.is_usable
     assert result.issues == []
@@ -23,14 +24,14 @@ def test_clean_candles_pass_through():
 
 def test_duplicate_timestamp_dropped():
     candles = [_candle(0), _candle(0), _candle(1)]
-    result = validate_candles(candles, Timeframe.H1, now=START + timedelta(hours=1))
+    result = validate_candles(candles, Timeframe.H1, now=START + timedelta(hours=2))
     assert len(result.clean_candles) == 2
     assert any("duplicate" in issue for issue in result.issues)
 
 
 def test_out_of_order_dropped():
     candles = [_candle(2), _candle(1), _candle(3)]
-    result = validate_candles(candles, Timeframe.H1, now=START + timedelta(hours=3))
+    result = validate_candles(candles, Timeframe.H1, now=START + timedelta(hours=4))
     assert [c.timestamp for c in result.clean_candles] == [
         START + timedelta(hours=2),
         START + timedelta(hours=3),
@@ -40,7 +41,7 @@ def test_out_of_order_dropped():
 
 def test_gap_reported_but_not_dropped():
     candles = [_candle(0), _candle(3)]
-    result = validate_candles(candles, Timeframe.H1, now=START + timedelta(hours=3))
+    result = validate_candles(candles, Timeframe.H1, now=START + timedelta(hours=4))
     assert len(result.clean_candles) == 2
     assert any("gap detected" in issue for issue in result.issues)
 
@@ -77,3 +78,39 @@ def test_empty_input_reports_issue():
     assert result.clean_candles == []
     assert not result.is_usable
     assert result.issues == ["no valid candles after validation"]
+
+
+def test_incomplete_trailing_candle_dropped():
+    # candle at hour 2 (H1) doesn't close until hour 3 — "now" is mid-candle
+    candles = [_candle(0), _candle(1), _candle(2)]
+    now = START + timedelta(hours=2, minutes=30)
+    result = validate_candles(candles, Timeframe.H1, now=now)
+    assert result.clean_candles == [candles[0], candles[1]]
+    assert any("incomplete" in issue for issue in result.issues)
+
+
+def test_candle_kept_at_exact_close_boundary():
+    candles = [_candle(0)]
+    now = START + timedelta(hours=1)  # exactly when the H1 candle closes
+    result = validate_candles(candles, Timeframe.H1, now=now)
+    assert result.clean_candles == candles
+    assert result.is_usable
+
+
+def test_only_incomplete_candle_leaves_no_valid_candles():
+    candles = [_candle(0)]
+    now = START + timedelta(minutes=30)  # candle not closed yet
+    result = validate_candles(candles, Timeframe.H1, now=now)
+    assert result.clean_candles == []
+    assert not result.is_usable
+    assert any("incomplete" in issue for issue in result.issues)
+
+
+def test_staleness_evaluated_after_incomplete_trim():
+    # After dropping the incomplete hour-2 candle, the newest real candle
+    # is hour 1 — still fresh relative to `now`, so this must NOT be stale.
+    candles = [_candle(0), _candle(1), _candle(2)]
+    now = START + timedelta(hours=2, minutes=30)
+    result = validate_candles(candles, Timeframe.H1, now=now)
+    assert result.is_stale is False
+    assert result.is_usable

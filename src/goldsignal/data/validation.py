@@ -55,9 +55,10 @@ def validate_candles(
 ) -> ValidationResult:
     """Validate `candles` (assumed given in ascending timestamp order).
 
-    Drops malformed, duplicate, and out-of-order candles. Gaps versus the
-    expected timeframe interval are reported as issues but do not remove
-    any candle. Staleness is checked against `now` (must be UTC).
+    Drops malformed, duplicate, out-of-order, and not-yet-closed (incomplete)
+    trailing candles. Gaps versus the expected timeframe interval are
+    reported as issues but do not remove any candle. Staleness is checked
+    against `now` (must be UTC), after the incomplete-candle trim.
     """
     require_utc(now, field_name="now")
 
@@ -93,6 +94,19 @@ def validate_candles(
 
         clean.append(c)
         last_kept_ts = c.timestamp
+
+    # Drop any trailing candle(s) that haven't actually closed yet as of
+    # `now` — e.g. a provider returning the still-forming current bar when
+    # queried with end=now(). Evaluating an incomplete candle violates the
+    # "only after a fully closed candle" requirement and its OHLC values
+    # are not final.
+    while clean and (clean[-1].timestamp + timeframe.duration) > now:
+        incomplete = clean.pop()
+        issues.append(
+            f"{incomplete.timestamp.isoformat()}: dropped incomplete candle "
+            f"(closes at {(incomplete.timestamp + timeframe.duration).isoformat()}, "
+            f"after now={now.isoformat()})"
+        )
 
     is_stale = False
     if clean:

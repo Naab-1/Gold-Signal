@@ -1,4 +1,7 @@
-"""Run a mode x preset backtest grid against the mock data provider.
+"""Run a mode x preset backtest grid against the configured data provider.
+
+Uses whatever GOLDSIGNAL_DATA_PROVIDER is set to (mock or twelvedata) —
+same provider selection as live/run_once.py, loaded from .env.
 
 Usage:
     python -m goldsignal.backtest.cli --mode both --preset all
@@ -8,8 +11,9 @@ from __future__ import annotations
 
 import argparse
 import logging
-from datetime import UTC, datetime
 from pathlib import Path
+
+from dotenv import load_dotenv
 
 from goldsignal.backtest.engine import generate_signals_walk_forward, simulate_trade_management
 from goldsignal.backtest.export import (
@@ -21,16 +25,22 @@ from goldsignal.backtest.export import (
 from goldsignal.backtest.metrics import compute_summary
 from goldsignal.backtest.models import BacktestSummary, BacktestTrade
 from goldsignal.backtest.split import DEFAULT_SPLIT_RATIO, split_cutoff_timestamp, split_trades
-from goldsignal.config import ModeConfig, load_daytrade_config, load_scalp_config
-from goldsignal.data.mock_provider import MockDataProvider
+from goldsignal.config import (
+    GlobalSettings,
+    ModeConfig,
+    load_daytrade_config,
+    load_global_settings,
+    load_scalp_config,
+)
+from goldsignal.data.provider import get_data_provider
+from goldsignal.data.validation import validate_candles
 from goldsignal.logging_config import configure_logging
 from goldsignal.strategy.day_trade import DayTradeStrategy
 from goldsignal.strategy.scalp import ScalpStrategy
 from goldsignal.strategy.trade_management import BreakevenRule, TradeManagementPreset
+from goldsignal.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
-
-_START = datetime(2020, 1, 1, tzinfo=UTC)
 
 _MODE_BUILDERS = {
     "scalp": (load_scalp_config, ScalpStrategy),
@@ -43,24 +53,37 @@ _ALL_PRESETS = list(TradeManagementPreset)
 def _run_mode(
     mode_key: str,
     *,
-    instrument: str,
-    seed: int,
+    settings: GlobalSettings,
     candle_count: int,
     presets: list[TradeManagementPreset],
     split_ratio: float,
 ) -> tuple[list[BacktestTrade], list[BacktestSummary]]:
+    instrument = settings.instrument
     config_loader, strategy_cls = _MODE_BUILDERS[mode_key]
     config: ModeConfig = config_loader()
     strategy = strategy_cls(config, instrument)
 
-    end = _START + config.entry_timeframe.duration * candle_count
-    provider = MockDataProvider(seed=seed, base_price=2400.0, volatility=6.0)
-    entry_candles = provider.get_candles(instrument, config.entry_timeframe, _START, end)
-    confirmation_candles = provider.get_candles(
-        instrument, config.confirmation_timeframe, _START, end
-    )
+    provider = get_data_provider(settings)
+    end = utc_now()
+    start = end - config.entry_timeframe.duration * candle_count
+    entry_raw = provider.get_candles(instrument, config.entry_timeframe, start, end)
+    confirm_raw = provider.get_candles(instrument, config.confirmation_timeframe, start, end)
 
-    logger.info("mode=%s generating signals over %d entry candles", mode_key, len(entry_candles))
+    entry_result = validate_candles(entry_raw, config.entry_timeframe, end)
+    confirm_result = validate_candles(confirm_raw, config.confirmation_timeframe, end)
+    for issue in entry_result.issues + confirm_result.issues:
+        logger.info("mode=%s data validation: %s", mode_key, issue)
+    entry_candles = entry_result.clean_candles
+    confirmation_candles = confirm_result.clean_candles
+
+    logger.info(
+        "mode=%s provider=%s generating signals over %d entry candles (%s .. %s)",
+        mode_key,
+        settings.data_provider,
+        len(entry_candles),
+        entry_candles[0].timestamp if entry_candles else "n/a",
+        entry_candles[-1].timestamp if entry_candles else "n/a",
+    )
     opened = generate_signals_walk_forward(strategy, entry_candles, confirmation_candles)
     logger.info("mode=%s opened %d trades", mode_key, len(opened))
 
@@ -109,14 +132,15 @@ def main() -> None:
     parser.add_argument(
         "--preset", choices=["conservative", "balanced", "runner", "all"], default="all"
     )
-    parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--candles", type=int, default=3000)
     parser.add_argument("--split-ratio", type=float, default=DEFAULT_SPLIT_RATIO)
-    parser.add_argument("--instrument", default="XAUUSD")
     parser.add_argument("--output-dir", default="backtest_output")
     args = parser.parse_args()
 
+    load_dotenv()
     configure_logging("INFO")
+    settings = load_global_settings()
+    print(f"Data provider: {settings.data_provider}")
 
     modes = ["scalp", "daytrade"] if args.mode == "both" else [args.mode]
     presets = _ALL_PRESETS if args.preset == "all" else [TradeManagementPreset(args.preset)]
@@ -126,8 +150,7 @@ def main() -> None:
     for mode_key in modes:
         trades, summaries = _run_mode(
             mode_key,
-            instrument=args.instrument,
-            seed=args.seed,
+            settings=settings,
             candle_count=args.candles,
             presets=presets,
             split_ratio=args.split_ratio,
