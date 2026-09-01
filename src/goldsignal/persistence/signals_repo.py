@@ -131,6 +131,72 @@ def count_signals_today(
     return count
 
 
+def count_signals_since(
+    conn: psycopg.Connection, *, strategy_mode: str, instrument: str, since: datetime
+) -> int:
+    """Count BUY/SELL signals at or after `since` — used for the 24h/7d/30d
+    diagnostics windows (count_signals_today covers the narrower "since
+    midnight UTC" case for live cooldown/session-limit purposes).
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COUNT(*) FROM signals
+            WHERE strategy_mode = %s AND instrument = %s
+              AND direction != 'NO_TRADE' AND signal_timestamp >= %s
+            """,
+            (strategy_mode, instrument, since),
+        )
+        (count,) = cur.fetchone()
+    return count
+
+
+def get_latest_signal_timestamp(
+    conn: psycopg.Connection, *, strategy_mode: str, instrument: str
+) -> datetime | None:
+    """Timestamp of the most recent stored signal of any direction —
+    i.e. the latest completed scan, whether or not it found a trade.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT signal_timestamp FROM signals
+            WHERE strategy_mode = %s AND instrument = %s
+            ORDER BY signal_timestamp DESC
+            LIMIT 1
+            """,
+            (strategy_mode, instrument),
+        )
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
+def count_consecutive_no_trade_scans(
+    conn: psycopg.Connection, *, strategy_mode: str, instrument: str, limit: int = 1000
+) -> int:
+    """How many of the most recent scans (any direction) in a row have been
+    NO_TRADE, walking backward from the latest until a BUY/SELL is hit.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT direction FROM signals
+            WHERE strategy_mode = %s AND instrument = %s
+            ORDER BY signal_timestamp DESC
+            LIMIT %s
+            """,
+            (strategy_mode, instrument, limit),
+        )
+        rows = cur.fetchall()
+    count = 0
+    for (direction,) in rows:
+        if direction == SignalDirection.NO_TRADE.value:
+            count += 1
+        else:
+            break
+    return count
+
+
 def build_evaluation_context(
     conn: psycopg.Connection, *, strategy_mode: str, instrument: str, now: datetime
 ) -> EvaluationContext:

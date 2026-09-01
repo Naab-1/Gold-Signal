@@ -10,5 +10,6 @@ __pycache__/
 *.sqlite3
 data/exports/
 backtest_output*/
+analysis_output*/
 .vscode/
 .idea/

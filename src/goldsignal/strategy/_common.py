@@ -32,6 +32,18 @@ from goldsignal.models.signal import (
 from goldsignal.strategy.base import EvaluationContext, make_signal_id
 from goldsignal.strategy.cost_model import estimate_costs
 from goldsignal.strategy.targets import build_targets, candidate_structure_levels
+from goldsignal.strategy.trace import (
+    COOLDOWN_BLOCKED,
+    COST_REJECTED,
+    ENTRY_NOT_CONFIRMED,
+    INDICATORS_UNAVAILABLE,
+    INSUFFICIENT_DATA,
+    NO_TREND_ALIGNMENT,
+    SESSION_LIMIT_BLOCKED,
+    SETUP_FAILED,
+    SIGNAL_EMITTED,
+    EvaluationTrace,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +131,45 @@ def evaluate_trend_ema_rsi_atr(
     now: datetime,
     context: EvaluationContext | None = None,
 ) -> StrategySignal:
+    """Thin wrapper over `evaluate_with_trace` for live callers that only
+    need the StrategySignal. See that function for the full rule pipeline.
+    """
+    signal, _trace = evaluate_with_trace(
+        mode=mode,
+        version=version,
+        config=config,
+        instrument=instrument,
+        entry_candles=entry_candles,
+        confirmation_candles=confirmation_candles,
+        now=now,
+        context=context,
+    )
+    return signal
+
+
+def evaluate_with_trace(
+    *,
+    mode: StrategyMode,
+    version: str,
+    config: ModeConfig,
+    instrument: str,
+    entry_candles: list[Candle],
+    confirmation_candles: list[Candle],
+    now: datetime,
+    context: EvaluationContext | None = None,
+) -> tuple[StrategySignal, EvaluationTrace]:
+    """Evaluate the strategy AND return a diagnostic trace of which rule
+    stage a candle reached — used by the analysis/frequency tooling to
+    build a funnel without a second, drift-prone implementation of the
+    rules. The returned StrategySignal is byte-for-byte what
+    `evaluate_trend_ema_rsi_atr` has always returned; the trace is
+    additive and never affects it.
+
+    Cooldown/session-limit are checked in their original position (before
+    indicators are computed), so the trace can't report candidate
+    direction/conditions for candles blocked by them — an accepted, minor
+    gap given how few candles that affects in practice (see trace.py).
+    """
     context = context or EvaluationContext()
     entry_timeframe = config.entry_timeframe
     confirmation_timeframe = config.confirmation_timeframe
@@ -147,18 +198,32 @@ def evaluate_trend_ema_rsi_atr(
             reason=reason,
         )
 
+    def trace(
+        stage: str, signal: StrategySignal, *, direction=None, conditions=None
+    ) -> EvaluationTrace:
+        return EvaluationTrace(
+            timestamp=signal_timestamp,
+            stage=stage,
+            candidate_direction=direction,
+            conditions=conditions or {},
+            signal=signal,
+        )
+
     min_entry_candles = _min_required_candles(config)
     min_confirm_candles = config.ema_slow_period + 1
     if len(entry_candles) < min_entry_candles or len(confirmation_candles) < min_confirm_candles:
-        return no_trade("insufficient_candle_history")
+        signal = no_trade("insufficient_candle_history")
+        return signal, trace(INSUFFICIENT_DATA, signal)
 
     if context.last_signal_time is not None:
         elapsed = now - context.last_signal_time
         if elapsed < timedelta(minutes=config.cooldown_minutes):
-            return no_trade("cooldown_active")
+            signal = no_trade("cooldown_active")
+            return signal, trace(COOLDOWN_BLOCKED, signal)
 
     if context.signals_emitted_this_session >= config.max_signals_per_session:
-        return no_trade("max_signals_per_session_reached")
+        signal = no_trade("max_signals_per_session_reached")
+        return signal, trace(SESSION_LIMIT_BLOCKED, signal)
 
     entry_closes = [c.close for c in entry_candles]
     ema_fast = compute_ema(entry_closes, config.ema_fast_period)
@@ -178,7 +243,8 @@ def evaluate_trend_ema_rsi_atr(
         or confirm_ema_fast[-1] is None
         or confirm_ema_slow[-1] is None
     ):
-        return no_trade("indicators_unavailable")
+        signal = no_trade("indicators_unavailable")
+        return signal, trace(INDICATORS_UNAVAILABLE, signal)
 
     current_ema_fast, current_ema_slow = ema_fast[-1], ema_slow[-1]
     current_rsi, current_atr = rsi_vals[-1], atr_vals[-1]
@@ -192,10 +258,11 @@ def evaluate_trend_ema_rsi_atr(
     elif entry_trend_down and confirm_trend_down:
         direction = SignalDirection.SELL
     else:
-        return no_trade(
+        signal = no_trade(
             "entry_and_confirmation_timeframe_trends_not_aligned",
             failed=["entry_confirmation_trend_alignment"],
         )
+        return signal, trace(NO_TREND_ALIGNMENT, signal)
 
     met = ["entry_confirmation_trend_alignment"]
     failed: list[str] = []
@@ -230,8 +297,19 @@ def evaluate_trend_ema_rsi_atr(
     )
     (met if retest_confirmed else failed).append("breakout_retest_confirmed")
 
-    if not not_choppy or not rsi_ok or not retest_confirmed:
-        return no_trade("one_or_more_confirmation_conditions_failed", met=met, failed=failed)
+    conditions = {
+        "not_choppy": not_choppy,
+        "rsi_confirmation": rsi_ok,
+        "breakout_retest_confirmed": retest_confirmed,
+    }
+    if not not_choppy or not rsi_ok:
+        signal = no_trade("one_or_more_confirmation_conditions_failed", met=met, failed=failed)
+        return signal, trace(SETUP_FAILED, signal, direction=direction, conditions=conditions)
+    if not retest_confirmed:
+        signal = no_trade("one_or_more_confirmation_conditions_failed", met=met, failed=failed)
+        return signal, trace(
+            ENTRY_NOT_CONFIRMED, signal, direction=direction, conditions=conditions
+        )
 
     entry_price = entry_candles[-1].close
     atr_stop = (
@@ -253,9 +331,10 @@ def evaluate_trend_ema_rsi_atr(
 
     risk = abs(entry_price - stop_loss)
     if risk <= 0:
-        return no_trade(
+        signal = no_trade(
             "invalid_risk_distance", met=met, failed=[*failed, "sufficient_reward_after_costs"]
         )
+        return signal, trace(COST_REJECTED, signal, direction=direction, conditions=conditions)
 
     costs = estimate_costs(
         config.estimated_spread, config.estimated_slippage, config.estimated_transaction_cost
@@ -281,12 +360,14 @@ def evaluate_trend_ema_rsi_atr(
         allow_tp3=allow_tp3,
     )
 
+    conditions["sufficient_reward_after_costs"] = bool(targets)
     if not targets:
-        return no_trade(
+        signal = no_trade(
             "no_target_clears_minimum_net_reward_after_costs",
             met=met,
             failed=[*failed, "sufficient_reward_after_costs"],
         )
+        return signal, trace(COST_REJECTED, signal, direction=direction, conditions=conditions)
     met.append("sufficient_reward_after_costs")
 
     setup_expiration = signal_timestamp + config.setup_expiration_candles * entry_timeframe.duration
@@ -322,7 +403,7 @@ def evaluate_trend_ema_rsi_atr(
         confidence,
     )
 
-    return StrategySignal(
+    signal = StrategySignal(
         signal_id=signal_id,
         instrument=instrument,
         strategy_mode=mode,
@@ -344,3 +425,4 @@ def evaluate_trend_ema_rsi_atr(
         confidence_score=confidence,
         reason=reason,
     )
+    return signal, trace(SIGNAL_EMITTED, signal, direction=direction, conditions=conditions)

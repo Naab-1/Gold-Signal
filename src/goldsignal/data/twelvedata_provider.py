@@ -16,6 +16,11 @@ Never logs the API key, even when logging the request (masked in the URL).
 Fails closed: any non-2xx status or a body with "status": "error" raises
 DataProviderError with the provider's own code/message — never returns
 partial or fabricated data.
+
+`outputsize` is documented as capped at 5000 rows per request. A wide
+date range needing more candles than that is transparently paginated as
+several requests (each safely under the cap), paced to stay under the
+free tier's 8-requests/minute limit, then merged/deduped/sorted.
 """
 
 from __future__ import annotations
@@ -47,6 +52,13 @@ _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 _MAX_ATTEMPTS = 3
 _RETRY_BACKOFF_SECONDS = 2.0
 
+# TwelveData documents outputsize as capped at 5000 rows per request. A
+# wide date range needing more candles than that is paginated as several
+# requests, each safely under the cap, paced to stay under the free
+# tier's 8-requests/minute limit.
+_MAX_CANDLES_PER_REQUEST = 4900
+_DEFAULT_MIN_SECONDS_BETWEEN_REQUESTS = 8.0
+
 
 class DataProviderError(RuntimeError):
     """Raised on any non-success response or malformed payload. Never
@@ -59,11 +71,18 @@ def _mask(url: str, api_key: str) -> str:
 
 
 class TwelveDataProvider:
-    def __init__(self, api_key: str, *, session: requests.Session | None = None):
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        session: requests.Session | None = None,
+        min_seconds_between_requests: float = _DEFAULT_MIN_SECONDS_BETWEEN_REQUESTS,
+    ):
         if not api_key:
             raise ValueError("api_key must not be empty")
         self._api_key = api_key
         self._session = session or requests.Session()
+        self._min_seconds_between_requests = min_seconds_between_requests
 
     def get_candles(
         self,
@@ -74,6 +93,32 @@ class TwelveDataProvider:
     ) -> list[Candle]:
         if timeframe not in _TIMEFRAME_TO_INTERVAL:
             raise ValueError(f"unsupported timeframe for TwelveData: {timeframe}")
+
+        max_span = timeframe.duration * _MAX_CANDLES_PER_REQUEST
+        if end - start <= max_span:
+            return self._get_candles_page(instrument, timeframe, start, end)
+
+        candles_by_timestamp: dict[datetime, Candle] = {}
+        chunk_start = start
+        first_request = True
+        while chunk_start < end:
+            if not first_request:
+                time.sleep(self._min_seconds_between_requests)
+            first_request = False
+            chunk_end = min(chunk_start + max_span, end)
+            for c in self._get_candles_page(instrument, timeframe, chunk_start, chunk_end):
+                candles_by_timestamp[c.timestamp] = c
+            chunk_start = chunk_end
+
+        return sorted(candles_by_timestamp.values(), key=lambda c: c.timestamp)
+
+    def _get_candles_page(
+        self,
+        instrument: str,
+        timeframe: Timeframe,
+        start: datetime,
+        end: datetime,
+    ) -> list[Candle]:
         symbol = instrument if "/" in instrument else f"{instrument[:3]}/{instrument[3:]}"
 
         params = {

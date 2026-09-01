@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -156,3 +156,70 @@ def test_api_key_never_appears_in_raised_error_message():
 def test_empty_api_key_rejected():
     with pytest.raises(ValueError):
         TwelveDataProvider(api_key="")
+
+
+def _row(dt, price):
+    return {
+        "datetime": dt.strftime("%Y-%m-%d %H:%M:%S"),
+        "open": str(price),
+        "high": str(price + 1),
+        "low": str(price - 1),
+        "close": str(price + 0.5),
+        "volume": "10",
+    }
+
+
+def _body(rows_ascending):
+    return {
+        "meta": {"exchange_timezone": "UTC"},
+        "values": list(reversed(rows_ascending)),  # API returns descending
+        "status": "ok",
+    }
+
+
+def test_paginates_when_span_exceeds_single_request_cap():
+    start = datetime(2024, 1, 1, tzinfo=UTC)
+    end = start + timedelta(days=20)  # > ~17 days cap for M5 -> needs 2 pages
+
+    page1_rows = [_row(start + timedelta(minutes=5 * i), 2000 + i) for i in range(3)]
+    page2_rows = [_row(end - timedelta(minutes=5 * i), 2100 + i) for i in range(3)]
+    session = _session_returning(
+        _response(body=_body(page1_rows)), _response(body=_body(page2_rows))
+    )
+    provider = TwelveDataProvider(api_key="KEY", session=session, min_seconds_between_requests=0.01)
+
+    with patch("goldsignal.data.twelvedata_provider.time.sleep") as mock_sleep:
+        candles = provider.get_candles("XAUUSD", Timeframe.M5, start, end)
+
+    assert session.get.call_count == 2
+    mock_sleep.assert_called_once()
+    assert len(candles) == 6
+    assert candles == sorted(candles, key=lambda c: c.timestamp)
+
+
+def test_pagination_dedupes_overlapping_boundary_candle():
+    start = datetime(2024, 1, 1, tzinfo=UTC)
+    end = start + timedelta(days=20)
+    shared_ts = start + timedelta(minutes=5)
+
+    page1_rows = [_row(start, 2000), _row(shared_ts, 2001)]
+    page2_rows = [_row(shared_ts, 9999), _row(end, 2002)]  # duplicate timestamp, different price
+    session = _session_returning(
+        _response(body=_body(page1_rows)), _response(body=_body(page2_rows))
+    )
+    provider = TwelveDataProvider(api_key="KEY", session=session, min_seconds_between_requests=0.01)
+
+    with patch("goldsignal.data.twelvedata_provider.time.sleep"):
+        candles = provider.get_candles("XAUUSD", Timeframe.M5, start, end)
+
+    timestamps = [c.timestamp for c in candles]
+    assert len(timestamps) == len(set(timestamps)) == 3
+
+
+def test_no_pagination_for_span_within_single_request_cap():
+    session = _session_returning(_response(body=_body([_row(START, 2000)])))
+    provider = TwelveDataProvider(api_key="KEY", session=session)
+    with patch("goldsignal.data.twelvedata_provider.time.sleep") as mock_sleep:
+        provider.get_candles("XAUUSD", Timeframe.M5, START, END)
+    assert session.get.call_count == 1
+    mock_sleep.assert_not_called()
