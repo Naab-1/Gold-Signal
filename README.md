@@ -27,9 +27,10 @@ deterministic BUY/SELL/NO_TRADE signals — it never places real trades.
 
 ## Current status: Phase 3
 
-The rule engine (Phase 1), backtester (Phase 2), and now real data,
-Telegram alerts, and Postgres persistence (Phase 3) exist. Not
-implemented yet: a scheduler and the FastAPI dashboard (Phase 4).
+The rule engine (Phase 1), backtester (Phase 2), real data/Telegram/
+persistence (Phase 3), and automatic scheduled checks via GitHub Actions
+now exist. Not implemented yet: the FastAPI dashboard with mode
+toggles/history (Phase 4).
 
 ### Running against real data
 
@@ -46,6 +47,23 @@ implemented yet: a scheduler and the FastAPI dashboard (Phase 4).
    Telegram message if a BUY/SELL fires (or logs why it didn't). There is
    no scheduler yet — run this by hand, or point an external cron at it
    yourself, whenever you want a check (Phase 4 automates this).
+
+### Automatic checks (GitHub Actions)
+
+`.github/workflows/check-signals.yml` runs both modes automatically
+every 15 minutes via GitHub Actions, once the repo has these secrets set
+(Settings → Secrets and variables → Actions → New repository secret —
+same 4 values as your local `.env`):
+
+```
+GOLDSIGNAL_TWELVEDATA_API_KEY
+GOLDSIGNAL_TELEGRAM_BOT_TOKEN
+GOLDSIGNAL_TELEGRAM_CHAT_ID
+GOLDSIGNAL_DATABASE_URL
+```
+
+You can also trigger it manually from the repo's **Actions** tab (the
+"Run workflow" button) without waiting for the schedule, to test it.
 
 Run a backtest (still mock data only — see Known Limitations):
 

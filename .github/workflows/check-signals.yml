@@ -1,0 +1,35 @@
+name: Check GoldSignal signals
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      GOLDSIGNAL_DATA_PROVIDER: twelvedata
+      GOLDSIGNAL_TWELVEDATA_API_KEY: ${{ secrets.GOLDSIGNAL_TWELVEDATA_API_KEY }}
+      GOLDSIGNAL_TELEGRAM_BOT_TOKEN: ${{ secrets.GOLDSIGNAL_TELEGRAM_BOT_TOKEN }}
+      GOLDSIGNAL_TELEGRAM_CHAT_ID: ${{ secrets.GOLDSIGNAL_TELEGRAM_CHAT_ID }}
+      GOLDSIGNAL_DATABASE_URL: ${{ secrets.GOLDSIGNAL_DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -e .
+
+      - name: Check Scalp mode
+        run: python -m goldsignal.live.run_once --mode scalp
+
+      - name: Check Day-Trade mode
+        if: always()
+        run: python -m goldsignal.live.run_once --mode daytrade
