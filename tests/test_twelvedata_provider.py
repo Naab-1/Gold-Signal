@@ -273,3 +273,74 @@ def test_consistency_check_skips_gracefully_when_spot_check_is_empty():
         candles = provider.get_candles("XAUUSD", Timeframe.M5, START, END)
 
     assert len(candles) == 1  # no exception despite being unable to verify
+
+
+def test_get_quote_parses_close_timestamp_and_market_open_without_bid_ask():
+    body = {"close": "2450.55", "timestamp": 1705320000, "is_market_open": True}
+    session = _session_returning(_response(body=body))
+    provider = TwelveDataProvider(api_key="KEY", session=session, verify_consistency=False)
+
+    quote = provider.get_quote("XAUUSD")
+
+    assert quote.last_price == 2450.55
+    assert quote.quote_timestamp == datetime.fromtimestamp(1705320000, tz=UTC)
+    assert quote.market_open is True
+    assert quote.provider == "twelvedata"
+    assert quote.bid is None
+    assert quote.ask is None
+    assert quote.mid is None
+    assert quote.spread is None
+    assert quote.price_source.value == "last_trade_price"
+
+
+def test_get_quote_computes_mid_and_spread_when_bid_ask_present():
+    body = {
+        "close": "1.0850",
+        "timestamp": 1705320000,
+        "is_market_open": True,
+        "bid": "1.08495",
+        "ask": "1.08505",
+    }
+    session = _session_returning(_response(body=body))
+    provider = TwelveDataProvider(api_key="KEY", session=session, verify_consistency=False)
+
+    quote = provider.get_quote("EURUSD")
+
+    assert quote.bid == 1.08495
+    assert quote.ask == 1.08505
+    assert quote.mid == pytest.approx(1.085)
+    assert quote.spread == pytest.approx(0.0001)
+    assert quote.price_source.value == "bid_ask_mid"
+
+
+def test_get_quote_missing_is_market_open_becomes_none():
+    body = {"close": "2450.55", "timestamp": 1705320000}
+    session = _session_returning(_response(body=body))
+    provider = TwelveDataProvider(api_key="KEY", session=session, verify_consistency=False)
+    quote = provider.get_quote("XAUUSD")
+    assert quote.market_open is None
+
+
+def test_get_quote_malformed_close_raises():
+    body = {"close": "not-a-number", "timestamp": 1705320000}
+    session = _session_returning(_response(body=body))
+    provider = TwelveDataProvider(api_key="KEY", session=session, verify_consistency=False)
+    with pytest.raises(DataProviderError):
+        provider.get_quote("XAUUSD")
+
+
+def test_get_quote_missing_timestamp_raises():
+    body = {"close": "2450.55"}
+    session = _session_returning(_response(body=body))
+    provider = TwelveDataProvider(api_key="KEY", session=session, verify_consistency=False)
+    with pytest.raises(DataProviderError):
+        provider.get_quote("XAUUSD")
+
+
+def test_get_quote_uses_symbol_with_slash():
+    body = {"close": "150.25", "timestamp": 1705320000}
+    session = _session_returning(_response(body=body))
+    provider = TwelveDataProvider(api_key="KEY", session=session, verify_consistency=False)
+    provider.get_quote("USDJPY")
+    called_params = session.get.call_args.kwargs["params"]
+    assert called_params["symbol"] == "USD/JPY"

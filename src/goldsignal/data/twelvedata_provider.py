@@ -35,16 +35,18 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 import requests
 
 from goldsignal.models.candle import Candle, Timeframe
+from goldsignal.models.quote import PriceSource, Quote
 
 logger = logging.getLogger(__name__)
 
 _BASE_URL = "https://api.twelvedata.com/time_series"
+_QUOTE_URL = "https://api.twelvedata.com/quote"
 
 _TIMEFRAME_TO_INTERVAL = {
     Timeframe.M1: "1min",
@@ -82,6 +84,18 @@ class DataProviderError(RuntimeError):
 
 def _mask(url: str, api_key: str) -> str:
     return url.replace(api_key, "***")
+
+
+def _parse_optional_price(raw: object) -> float | None:
+    """Defensive bid/ask parsing: absent, null, or unparseable all become
+    None (bid/ask genuinely not supplied) — never a fabricated fallback.
+    """
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 class TwelveDataProvider:
@@ -182,13 +196,52 @@ class TwelveDataProvider:
             "timezone": "UTC",
         }
 
-        payload = self._request(params)
+        payload = self._request(_BASE_URL, params)
         return self._parse(payload)
 
-    def _request(self, params: dict) -> dict:
+    def get_quote(self, instrument: str) -> Quote:
+        symbol = instrument if "/" in instrument else f"{instrument[:3]}/{instrument[3:]}"
+        payload = self._request(_QUOTE_URL, {"symbol": symbol, "apikey": self._api_key})
+        return self._parse_quote(instrument, payload)
+
+    def _parse_quote(self, instrument: str, payload: dict) -> Quote:
+        try:
+            last_price = float(payload["close"])
+            quote_timestamp = datetime.fromtimestamp(int(payload["timestamp"]), tz=UTC)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise DataProviderError(f"TwelveData returned a malformed quote: {payload!r}") from exc
+
+        market_open = payload.get("is_market_open")
+        if not isinstance(market_open, bool):
+            market_open = None
+
+        bid = _parse_optional_price(payload.get("bid"))
+        ask = _parse_optional_price(payload.get("ask"))
+        if bid is not None and ask is not None:
+            mid = (bid + ask) / 2
+            spread = ask - bid
+            price_source = PriceSource.BID_ASK_MID
+        else:
+            bid = ask = mid = spread = None
+            price_source = PriceSource.LAST_TRADE_PRICE
+
+        return Quote(
+            instrument=instrument,
+            provider="twelvedata",
+            quote_timestamp=quote_timestamp,
+            last_price=last_price,
+            price_source=price_source,
+            bid=bid,
+            ask=ask,
+            mid=mid,
+            spread=spread,
+            market_open=market_open,
+        )
+
+    def _request(self, url: str, params: dict) -> dict:
         last_error: Exception | None = None
         for attempt in range(1, _MAX_ATTEMPTS + 1):
-            response = self._session.get(_BASE_URL, params=params, timeout=15)
+            response = self._session.get(url, params=params, timeout=15)
             masked_url = _mask(response.url, self._api_key)
 
             if response.status_code in _RETRYABLE_STATUS_CODES:

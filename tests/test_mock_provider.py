@@ -47,3 +47,32 @@ def test_end_before_start_raises():
     provider = MockDataProvider(seed=1)
     with pytest.raises(ValueError):
         provider.get_candles("XAUUSD", Timeframe.H1, END, START)
+
+
+def test_get_quote_is_deterministic_given_same_seed():
+    p1 = MockDataProvider(seed=7)
+    p2 = MockDataProvider(seed=7)
+    q1 = p1.get_quote("EURUSD")
+    q2 = p2.get_quote("EURUSD")
+    assert q1.bid == q2.bid
+    assert q1.ask == q2.ask
+    assert q1.mid == q2.mid
+
+
+def test_get_quote_diverges_across_instruments():
+    provider = MockDataProvider(seed=7)
+    q_xau = provider.get_quote("XAUUSD")
+    q_eur = provider.get_quote("EURUSD")
+    assert q_xau.mid != q_eur.mid
+
+
+def test_get_quote_provider_is_always_literally_mock():
+    provider = MockDataProvider(seed=1)
+    assert provider.get_quote("XAUUSD").provider == "mock"
+
+
+def test_get_quote_bid_le_mid_le_ask():
+    provider = MockDataProvider(seed=1)
+    quote = provider.get_quote("USDJPY")
+    assert quote.bid <= quote.mid <= quote.ask
+    assert quote.spread == quote.ask - quote.bid

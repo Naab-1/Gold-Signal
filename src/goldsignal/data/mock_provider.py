@@ -19,7 +19,8 @@ import random
 from datetime import UTC, datetime, timedelta
 
 from goldsignal.models.candle import Candle, Timeframe
-from goldsignal.utils.time import require_utc
+from goldsignal.models.quote import PriceSource, Quote
+from goldsignal.utils.time import require_utc, utc_now
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
@@ -81,3 +82,26 @@ class MockDataProvider:
             )
             price = close_price
         return candles
+
+    def get_quote(self, instrument: str) -> Quote:
+        """Synthetic quote for exercising the bid/ask display path in tests
+        and local development only — `provider` is always literally "mock"
+        so this can never be mistaken for a real vendor's data.
+        """
+        rng = random.Random(f"{self._seed}:{instrument}:quote")
+        mid = max(0.01, self._base_price + rng.gauss(0, self._volatility))
+        half_spread = max(self._base_price * 0.00005, 0.001)
+        bid = mid - half_spread
+        ask = mid + half_spread
+        return Quote(
+            instrument=instrument,
+            provider="mock",
+            quote_timestamp=utc_now(),
+            last_price=mid,
+            price_source=PriceSource.BID_ASK_MID,
+            bid=bid,
+            ask=ask,
+            mid=mid,
+            spread=ask - bid,
+            market_open=True,
+        )

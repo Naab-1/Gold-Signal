@@ -6,11 +6,16 @@ backtest_output/'s pattern of writing files to open directly).
 from __future__ import annotations
 
 import html
+from datetime import datetime
 from pathlib import Path
 
 from goldsignal.analysis.diagnostics import DiagnosticsSnapshot
 from goldsignal.analysis.frequency import FrequencyReport
+from goldsignal.analysis.tier_comparison import TierComparisonReport
 from goldsignal.analysis.variants import VariantResult
+from goldsignal.data.quote_validation import QuoteAssessment
+from goldsignal.instruments import InstrumentProfile
+from goldsignal.notifications.sessions import to_accra_time
 
 
 def format_frequency_report(report: FrequencyReport) -> str:
@@ -65,6 +70,130 @@ def format_variant_comparison(results: list[VariantResult]) -> str:
             f"{r.summary.expectancy_r:+13.3f} {pf:>14s} {r.summary.max_drawdown_r:9.2f} "
             f"{r.summary.max_consecutive_losses:11d}"
         )
+    return "\n".join(lines)
+
+
+def format_tier_comparison(report: TierComparisonReport) -> str:
+    lines = [
+        f"=== Tier comparison: {report.mode} "
+        f"({report.span_days:.1f} days, {report.total_trading_days} trading days) ===",
+        "",
+        "A+ and A-tier statistics are never combined — each variant below is its own,",
+        "fully independent walk over the same history. The A tier (both variants) is",
+        "experimental and not recommended for activation unless its out-of-sample",
+        "expectancy is positive after realistic costs.",
+        "",
+    ]
+    lines.append("Grade counts over the full range (WATCHLIST only applies to two_candle):")
+    for variant, counts in report.grade_counts.items():
+        lines.append(f"  {variant:24s} {counts}")
+    lines.append("")
+    lines.append(f"Zero-signal days by variant: {report.zero_signal_days}")
+    lines.append("")
+
+    def _table(title: str, splits) -> None:
+        lines.append(title)
+        header = (
+            f"{'variant':24s} {'split':14s} {'trades':>7s} {'sig/day':>8s} "
+            f"{'win_rate':>9s} {'expectancy_r':>13s} {'profit_factor':>14s} "
+            f"{'max_dd_r':>9s} {'max_losses':>11s}"
+        )
+        lines.append(header)
+        lines.append("-" * len(header))
+        for s in splits:
+            summary = s.summary
+            pf = "n/a" if summary.profit_factor is None else f"{summary.profit_factor:.2f}"
+            lines.append(
+                f"{s.variant:24s} {s.split_label:14s} {summary.total_trades:7d} "
+                f"{s.signals_per_day:8.2f} {summary.win_rate:9.2%} "
+                f"{summary.expectancy_r:+13.3f} {pf:>14s} {summary.max_drawdown_r:9.2f} "
+                f"{summary.max_consecutive_losses:11d}"
+            )
+        lines.append("")
+
+    _table("Real (configured) costs:", report.splits)
+    _table(
+        "Worse-case costs (spread/slippage/transaction-cost multiplied up):",
+        report.worse_case_splits,
+    )
+
+    lines.append("Actionable signals by session (real-cost splits, dev+oos combined):")
+    by_variant_session: dict[str, dict[str, int]] = {}
+    for s in report.splits:
+        merged = by_variant_session.setdefault(s.variant, {})
+        for session, count in s.signals_by_session.items():
+            merged[session] = merged.get(session, 0) + count
+    for variant, sessions in by_variant_session.items():
+        lines.append(f"  {variant:24s} {sessions}")
+
+    return "\n".join(lines)
+
+
+def format_quotes_dashboard(
+    rows: list[tuple[InstrumentProfile, QuoteAssessment | None, str | None]], *, now: datetime
+) -> str:
+    """One section per instrument. `error` is set instead of `assessment`
+    when the quote was genuinely unobtainable (DATA UNAVAILABLE) — that
+    state is rendered explicitly, never silently skipped or blended into
+    a stale/zero value.
+    """
+    accra_now = to_accra_time(now)
+    lines = [
+        f"=== Instrument quotes ({now.isoformat()} UTC / "
+        f"{accra_now.strftime('%Y-%m-%d %H:%M:%S')} Accra) ===",
+        "",
+    ]
+    for profile, assessment, error in rows:
+        lines.append(f"--- {profile.display_symbol} ({profile.code}) ---")
+        if assessment is None:
+            lines.append(f"  DATA UNAVAILABLE: {error}")
+            lines.append("")
+            continue
+
+        quote = assessment.quote
+        precision = profile.decimal_precision
+        accra = to_accra_time(quote.quote_timestamp)
+        lines.append(f"  Provider: {quote.provider}")
+        lines.append(
+            f"  Quote time: {quote.quote_timestamp.isoformat()} UTC / "
+            f"{accra.strftime('%Y-%m-%d %H:%M:%S')} Accra"
+        )
+        lines.append(f"  Last price: {quote.last_price:.{precision}f}")
+        if quote.bid is not None:
+            lines.append(
+                f"  Bid/Ask/Mid: {quote.bid:.{precision}f} / {quote.ask:.{precision}f} / "
+                f"{quote.mid:.{precision}f}  Spread: {quote.spread:.{precision}f}"
+            )
+        else:
+            lines.append("  Bid/Ask/Mid/Spread: not supplied by this provider")
+
+        if quote.market_open is None:
+            lines.append("  Market: unknown (provider did not report open/closed)")
+        else:
+            lines.append(f"  Market: {'OPEN' if quote.market_open else 'CLOSED'}")
+
+        lines.append(f"  Stale: {'YES' if assessment.is_stale else 'no'}")
+
+        if assessment.spread_exceeds_max is None:
+            lines.append("  Spread vs max permitted: unknown (spread not supplied)")
+        else:
+            max_spread_str = f"{profile.max_permitted_spread:.{precision}f}"
+            lines.append(
+                "  Spread vs max permitted: "
+                + (
+                    f"EXCEEDS max ({max_spread_str})"
+                    if assessment.spread_exceeds_max
+                    else "within limit"
+                )
+            )
+
+        if assessment.broker_mismatch is not None:
+            flag = "MISMATCH" if assessment.broker_mismatch else "match"
+            lines.append(
+                f"  Broker price {assessment.broker_price:.{precision}f}: {flag} "
+                f"(diff {assessment.broker_diff:+.{precision}f})"
+            )
+        lines.append("")
     return "\n".join(lines)
 
 

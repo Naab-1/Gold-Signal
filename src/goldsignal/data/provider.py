@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Protocol
 
 from goldsignal.models.candle import Candle, Timeframe
+from goldsignal.models.quote import Quote
 
 
 class DataProvider(Protocol):
@@ -26,6 +27,15 @@ class DataProvider(Protocol):
         Implementations must return candles sorted ascending by timestamp,
         with no duplicates, and must raise rather than silently return
         malformed data.
+        """
+        ...
+
+    def get_quote(self, instrument: str) -> Quote:
+        """Return the current price for `instrument`.
+
+        Must raise `DataProviderError` if a quote genuinely can't be
+        obtained; must leave bid/ask/mid/spread as None when the provider
+        doesn't supply them — never synthesize an unobserved spread.
         """
         ...
 
