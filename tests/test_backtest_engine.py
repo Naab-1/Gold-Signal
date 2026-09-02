@@ -1,5 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from goldsignal.backtest.engine import simulate_trade_management
 from goldsignal.backtest.models import OpenedTrade
 from goldsignal.models.candle import Candle, Timeframe
@@ -217,3 +219,179 @@ def test_data_ends_while_open_marks_to_market():
     assert trade.exit_reason == "data_end_mark_to_market"
     assert trade.exit_price == 101.5
     assert trade.target_fills == []
+
+
+# --- Exit-side spread/slippage cost (audit finding: entry charged half-
+# spread+slippage via entry_fill_price, but exits charged nothing beyond a
+# flat transaction_cost -- not duplicated, but under-counted real
+# round-trip cost). estimated_spread/estimated_slippage default to 0.0 so
+# every test above this line is unaffected. ---
+
+
+def test_stop_exit_charges_half_spread_plus_slippage():
+    signal = _signal(
+        stop_loss=95.0, targets=[ProfitTarget(label="TP1", price=103.0, r_multiple=0.6)]
+    )
+    opened = _opened(signal)  # fill_price=100, risk=5
+    candles = [_candle(0, 100, 101, 94, 94.5)]
+
+    trade = simulate_trade_management(
+        opened,
+        candles,
+        preset=TradeManagementPreset.BALANCED,
+        shortfall_mode=TpShortfallHandling.NORMALIZE,
+        breakeven_rule=NO_BREAKEVEN,
+        transaction_cost=0.0,
+        estimated_spread=1.0,
+        estimated_slippage=0.5,
+    )
+
+    # exit_adverse = 1.0/2 + 0.5 = 1.0; additional cost = 1.0/risk(5) = 0.2
+    assert trade.exit_price == 94.0  # stop(95) - exit_adverse(1.0)
+    assert trade.realized_r == -1.2
+
+
+def test_gapped_through_stop_also_charges_exit_adverse():
+    signal = _signal(
+        stop_loss=95.0, targets=[ProfitTarget(label="TP1", price=103.0, r_multiple=0.6)]
+    )
+    opened = _opened(signal, fill_price=94.0, gapped=True)  # risk = |94-95| = 1
+    candles = [_candle(0, 94, 96, 93, 95)]
+
+    trade = simulate_trade_management(
+        opened,
+        candles,
+        preset=TradeManagementPreset.BALANCED,
+        shortfall_mode=TpShortfallHandling.NORMALIZE,
+        breakeven_rule=NO_BREAKEVEN,
+        transaction_cost=0.0,
+        estimated_spread=0.2,
+        estimated_slippage=0.0,
+    )
+
+    # exit_adverse = 0.1; additional cost = 0.1/risk(1) = 0.1 on top of -1.0
+    assert trade.realized_r == -1.1
+
+
+def test_target_hit_charges_exit_adverse_on_the_realized_r_not_the_displayed_price():
+    signal = _signal(
+        stop_loss=95.0, targets=[ProfitTarget(label="TP1", price=105.0, r_multiple=1.0)]
+    )
+    opened = _opened(signal)  # fill_price=100, risk=5
+    candles = [_candle(0, 100, 106, 100, 105.5)]  # touches TP1=105
+
+    trade = simulate_trade_management(
+        opened,
+        candles,
+        preset=TradeManagementPreset.BALANCED,
+        shortfall_mode=TpShortfallHandling.NORMALIZE,
+        breakeven_rule=NO_BREAKEVEN,
+        transaction_cost=0.0,
+        estimated_spread=1.0,
+        estimated_slippage=0.0,
+    )
+
+    # The nominal target price is still shown on the fill record...
+    assert trade.target_fills[0].price == 105.0
+    # ...but the R actually realized reflects effective_price = 105 - 0.5 = 104.5
+    expected_r_multiple = (104.5 - 100) / 5
+    assert trade.target_fills[0].r_multiple == expected_r_multiple
+
+
+def test_sell_direction_exit_adverse_has_opposite_sign():
+    ts = START
+    signal = StrategySignal(
+        signal_id="sig_sell",
+        instrument="XAUUSD",
+        strategy_mode=StrategyMode.SCALP,
+        strategy_version="v1",
+        entry_timeframe=Timeframe.M5,
+        confirmation_timeframe=Timeframe.M15,
+        direction=SignalDirection.SELL,
+        signal_timestamp=ts,
+        entry_price=100.0,
+        entry_order_type=EntryOrderType.MARKET,
+        stop_loss=105.0,
+        targets=[ProfitTarget(label="TP1", price=90.0, r_multiple=2.0)],
+        setup_expiration=ts + timedelta(hours=1),
+        invalidation_conditions=["x"],
+        estimated_spread=0.0,
+        estimated_slippage=0.0,
+    )
+    opened = _opened(signal, fill_price=100.0)  # risk = |100-105| = 5
+    candles = [_candle(0, 100, 106, 99, 105.5)]  # touches stop=105
+
+    trade = simulate_trade_management(
+        opened,
+        candles,
+        preset=TradeManagementPreset.BALANCED,
+        shortfall_mode=TpShortfallHandling.NORMALIZE,
+        breakeven_rule=NO_BREAKEVEN,
+        transaction_cost=0.0,
+        estimated_spread=1.0,
+        estimated_slippage=0.0,
+    )
+
+    # SELL exit is a buy-to-close: adverse cost pushes the exit price UP,
+    # not down -- 105 + 0.5 = 105.5, a worse (more negative) outcome.
+    assert trade.exit_price == 105.5
+    assert trade.realized_r == -1.1
+
+
+def test_exit_adverse_defaults_to_zero_when_not_specified():
+    """Backward compatibility: callers that don't pass
+    estimated_spread/estimated_slippage get exactly the old behavior.
+    """
+    signal = _signal(
+        stop_loss=95.0, targets=[ProfitTarget(label="TP1", price=103.0, r_multiple=0.6)]
+    )
+    opened = _opened(signal)
+    candles = [_candle(0, 100, 101, 94, 94.5)]
+
+    trade = simulate_trade_management(
+        opened,
+        candles,
+        preset=TradeManagementPreset.BALANCED,
+        shortfall_mode=TpShortfallHandling.NORMALIZE,
+        breakeven_rule=NO_BREAKEVEN,
+        transaction_cost=0.0,
+    )
+
+    assert trade.realized_r == -1.0
+
+
+def test_exit_cost_is_charged_once_not_duplicated():
+    """The audit question this whole section exists to answer: is spread
+    ever charged twice? Compare a spread=0 baseline against a spread=S
+    trade on an otherwise-identical stop-out -- the difference must equal
+    exactly one half-spread's worth of R, not two.
+    """
+    signal = _signal(
+        stop_loss=95.0, targets=[ProfitTarget(label="TP1", price=103.0, r_multiple=0.6)]
+    )
+    candles = [_candle(0, 100, 101, 94, 94.5)]
+
+    baseline = simulate_trade_management(
+        _opened(signal),
+        candles,
+        preset=TradeManagementPreset.BALANCED,
+        shortfall_mode=TpShortfallHandling.NORMALIZE,
+        breakeven_rule=NO_BREAKEVEN,
+        transaction_cost=0.0,
+        estimated_spread=0.0,
+        estimated_slippage=0.0,
+    )
+    with_spread = simulate_trade_management(
+        _opened(signal),
+        candles,
+        preset=TradeManagementPreset.BALANCED,
+        shortfall_mode=TpShortfallHandling.NORMALIZE,
+        breakeven_rule=NO_BREAKEVEN,
+        transaction_cost=0.0,
+        estimated_spread=2.0,
+        estimated_slippage=0.0,
+    )
+
+    risk = 5.0  # fill_price=100, stop=95
+    expected_diff = (2.0 / 2) / risk  # half-spread only, applied once, at exit
+    assert baseline.realized_r - with_spread.realized_r == pytest.approx(expected_diff)

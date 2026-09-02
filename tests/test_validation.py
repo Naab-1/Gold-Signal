@@ -65,6 +65,34 @@ def test_close_outside_high_low_dropped():
     assert result.clean_candles == []
 
 
+def test_open_outside_high_low_dropped():
+    candles = [_candle(0, open=200.0)]
+    result = validate_candles(candles, Timeframe.H1, now=START)
+    assert result.clean_candles == []
+    assert any("open_outside_high_low_range" in issue for issue in result.issues)
+
+
+def test_non_finite_value_dropped():
+    candles = [_candle(0, close=float("nan"))]
+    result = validate_candles(candles, Timeframe.H1, now=START)
+    assert result.clean_candles == []
+    assert any("non_finite_value" in issue for issue in result.issues)
+
+
+def test_infinite_value_dropped():
+    candles = [_candle(0, high=float("inf"))]
+    result = validate_candles(candles, Timeframe.H1, now=START)
+    assert result.clean_candles == []
+    assert any("non_finite_value" in issue for issue in result.issues)
+
+
+def test_non_positive_close_dropped():
+    candles = [_candle(0, open=0.0, high=0.5, low=-0.5, close=0.0)]
+    result = validate_candles(candles, Timeframe.H1, now=START)
+    assert result.clean_candles == []
+    assert any("non_positive_close" in issue for issue in result.issues)
+
+
 def test_stale_data_flagged():
     candles = [_candle(0)]
     now = START + timedelta(hours=10)

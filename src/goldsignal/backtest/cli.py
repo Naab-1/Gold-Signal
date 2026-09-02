@@ -103,6 +103,8 @@ def _run_mode(
                 shortfall_mode=config.tp_shortfall_handling,
                 breakeven_rule=breakeven_rule,
                 transaction_cost=config.estimated_transaction_cost,
+                estimated_spread=config.estimated_spread,
+                estimated_slippage=config.estimated_slippage,
             )
             for o in opened
         ]

@@ -174,6 +174,8 @@ def _walk(
                 shortfall_mode=config.tp_shortfall_handling,
                 breakeven_rule=breakeven_rule,
                 transaction_cost=transaction_cost,
+                estimated_spread=config.estimated_spread,
+                estimated_slippage=config.estimated_slippage,
             )
             trades.append(trade)
             actionable_days.add(current_date)

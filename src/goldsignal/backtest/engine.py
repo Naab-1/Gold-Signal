@@ -101,6 +101,22 @@ def generate_signals_walk_forward(
     return opened
 
 
+def exit_fill_price(direction: SignalDirection, raw_exit_price: float, adverse: float) -> float:
+    """Mirror of `entry_fill_price`'s adverse adjustment, applied on the way
+    out: closing a BUY means selling (you receive less), closing a SELL
+    means buying (you pay more) — the opposite sign from entry, applied to
+    whatever raw price triggered the exit (stop, target, or mark-to-market
+    close). Before this existed, `simulate_trade_management` charged the
+    entry-side half-spread+slippage but nothing on exit, silently
+    understating real round-trip cost (never double-counting it — the
+    audit that found this was specifically checking for duplication and
+    found under-counting instead).
+    """
+    if direction == SignalDirection.BUY:
+        return raw_exit_price - adverse
+    return raw_exit_price + adverse
+
+
 def simulate_trade_management(
     opened: OpenedTrade,
     entry_candles: list[Candle],
@@ -109,18 +125,32 @@ def simulate_trade_management(
     shortfall_mode: TpShortfallHandling,
     breakeven_rule: BreakevenRule,
     transaction_cost: float,
+    estimated_spread: float = 0.0,
+    estimated_slippage: float = 0.0,
 ) -> BacktestTrade:
     """Replay candles from the fill candle onward against the trade's stop
     and targets, simulating this preset's partial closes and the
     configured breakeven rule. Same-candle stop+target collisions are
     resolved conservatively: the stop is assumed to trigger first.
+
+    `estimated_spread`/`estimated_slippage` (default 0.0, preserving old
+    behavior for callers that don't pass them) apply the same adverse
+    half-spread+slippage adjustment on exit that `entry_fill_price` already
+    applies on entry -- see `exit_fill_price`.
     """
     signal = opened.signal
     is_buy = signal.direction == SignalDirection.BUY
     initial_stop = signal.stop_loss
     fill_price = opened.fill_price
+    exit_adverse = estimated_spread / 2 + estimated_slippage
 
     if opened.gapped_through_stop:
+        # The fill itself already happened beyond the stop, so the loss is
+        # conservatively assumed to be the full risk amount (not derived
+        # from a price difference, since fill and exit are the same price
+        # by construction here) -- exit-side adverse cost still applies on
+        # top of that, same as any other exit.
+        exit_price = exit_fill_price(signal.direction, fill_price, exit_adverse)
         risk = max(abs(fill_price - initial_stop), 1e-9)
         return BacktestTrade(
             signal_id=signal.signal_id,
@@ -134,9 +164,9 @@ def simulate_trade_management(
             initial_stop_loss=initial_stop,
             risk=risk,
             exit_timestamp=opened.fill_timestamp,
-            exit_price=fill_price,
+            exit_price=exit_price,
             exit_reason="stop",
-            realized_r=-1.0 - transaction_cost / risk,
+            realized_r=-1.0 - exit_adverse / risk - transaction_cost / risk,
             is_full_stop=True,
             breakeven_triggered=False,
         )
@@ -160,7 +190,7 @@ def simulate_trade_management(
     for c in entry_candles[opened.fill_candle_index :]:
         stop_touched = c.low <= current_stop if is_buy else c.high >= current_stop
         if stop_touched:
-            exit_price = current_stop
+            exit_price = exit_fill_price(signal.direction, current_stop, exit_adverse)
             exit_timestamp = c.timestamp
             exit_reason = "breakeven_stop" if current_stop != initial_stop else "stop"
             r_at_exit = (
@@ -176,8 +206,11 @@ def simulate_trade_management(
             if not touched:
                 continue
             allocation = allocations[idx]
+            effective_price = exit_fill_price(signal.direction, target.price, exit_adverse)
             r_multiple = (
-                (target.price - fill_price) / risk if is_buy else (fill_price - target.price) / risk
+                (effective_price - fill_price) / risk
+                if is_buy
+                else (fill_price - effective_price) / risk
             )
             contribution = allocation * r_multiple
             target_fills.append(
@@ -233,7 +266,7 @@ def simulate_trade_management(
             break
     else:
         last_candle = entry_candles[-1]
-        exit_price = last_candle.close
+        exit_price = exit_fill_price(signal.direction, last_candle.close, exit_adverse)
         exit_timestamp = last_candle.timestamp
         exit_reason = "data_end_mark_to_market"
         r_at_exit = (exit_price - fill_price) / risk if is_buy else (fill_price - exit_price) / risk
