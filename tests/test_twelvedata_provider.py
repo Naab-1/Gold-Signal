@@ -52,7 +52,7 @@ def test_parses_and_converts_exchange_timezone_to_utc():
         "status": "ok",
     }
     session = _session_returning(_response(body=body))
-    provider = TwelveDataProvider(api_key="SECRET123", session=session)
+    provider = TwelveDataProvider(api_key="SECRET123", session=session, verify_consistency=False)
 
     candles = provider.get_candles("XAUUSD", Timeframe.M5, START, END)
 
@@ -79,7 +79,7 @@ def test_missing_volume_defaults_to_zero():
         "status": "ok",
     }
     session = _session_returning(_response(body=body))
-    provider = TwelveDataProvider(api_key="KEY", session=session)
+    provider = TwelveDataProvider(api_key="KEY", session=session, verify_consistency=False)
     candles = provider.get_candles("XAUUSD", Timeframe.H1, START, END)
     assert candles[0].volume == 0.0
 
@@ -87,14 +87,14 @@ def test_missing_volume_defaults_to_zero():
 def test_error_status_in_body_raises():
     body = {"code": 401, "message": "Invalid API key", "status": "error"}
     session = _session_returning(_response(status_code=200, body=body))
-    provider = TwelveDataProvider(api_key="BADKEY", session=session)
+    provider = TwelveDataProvider(api_key="BADKEY", session=session, verify_consistency=False)
     with pytest.raises(DataProviderError, match="Invalid API key"):
         provider.get_candles("XAUUSD", Timeframe.H1, START, END)
 
 
 def test_non_retryable_http_error_raises_immediately():
     session = _session_returning(_response(status_code=401))
-    provider = TwelveDataProvider(api_key="BADKEY", session=session)
+    provider = TwelveDataProvider(api_key="BADKEY", session=session, verify_consistency=False)
     with pytest.raises(DataProviderError):
         provider.get_candles("XAUUSD", Timeframe.H1, START, END)
     assert session.get.call_count == 1
@@ -103,7 +103,7 @@ def test_non_retryable_http_error_raises_immediately():
 def test_retryable_error_then_success():
     body = {"meta": {"exchange_timezone": "UTC"}, "values": [], "status": "ok"}
     session = _session_returning(_response(status_code=429), _response(status_code=200, body=body))
-    provider = TwelveDataProvider(api_key="KEY", session=session)
+    provider = TwelveDataProvider(api_key="KEY", session=session, verify_consistency=False)
     with patch("goldsignal.data.twelvedata_provider.time.sleep"):
         candles = provider.get_candles("XAUUSD", Timeframe.H1, START, END)
     assert candles == []
@@ -114,7 +114,7 @@ def test_retryable_error_exhausts_attempts_and_raises():
     session = _session_returning(
         _response(status_code=500), _response(status_code=500), _response(status_code=500)
     )
-    provider = TwelveDataProvider(api_key="KEY", session=session)
+    provider = TwelveDataProvider(api_key="KEY", session=session, verify_consistency=False)
     with patch("goldsignal.data.twelvedata_provider.time.sleep"):
         with pytest.raises(DataProviderError):
             provider.get_candles("XAUUSD", Timeframe.H1, START, END)
@@ -136,7 +136,7 @@ def test_malformed_candle_row_raises():
         "status": "ok",
     }
     session = _session_returning(_response(body=body))
-    provider = TwelveDataProvider(api_key="KEY", session=session)
+    provider = TwelveDataProvider(api_key="KEY", session=session, verify_consistency=False)
     with pytest.raises(DataProviderError):
         provider.get_candles("XAUUSD", Timeframe.H1, START, END)
 
@@ -146,7 +146,7 @@ def test_api_key_never_appears_in_raised_error_message():
         status_code=500, url="https://api.twelvedata.com/time_series?apikey=SECRET123"
     )
     session = _session_returning(error_response, error_response, error_response)
-    provider = TwelveDataProvider(api_key="SECRET123", session=session)
+    provider = TwelveDataProvider(api_key="SECRET123", session=session, verify_consistency=False)
     with patch("goldsignal.data.twelvedata_provider.time.sleep"):
         with pytest.raises(DataProviderError) as exc_info:
             provider.get_candles("XAUUSD", Timeframe.H1, START, END)
@@ -186,7 +186,9 @@ def test_paginates_when_span_exceeds_single_request_cap():
     session = _session_returning(
         _response(body=_body(page1_rows)), _response(body=_body(page2_rows))
     )
-    provider = TwelveDataProvider(api_key="KEY", session=session, min_seconds_between_requests=0.01)
+    provider = TwelveDataProvider(
+        api_key="KEY", session=session, min_seconds_between_requests=0.01, verify_consistency=False
+    )
 
     with patch("goldsignal.data.twelvedata_provider.time.sleep") as mock_sleep:
         candles = provider.get_candles("XAUUSD", Timeframe.M5, start, end)
@@ -207,7 +209,9 @@ def test_pagination_dedupes_overlapping_boundary_candle():
     session = _session_returning(
         _response(body=_body(page1_rows)), _response(body=_body(page2_rows))
     )
-    provider = TwelveDataProvider(api_key="KEY", session=session, min_seconds_between_requests=0.01)
+    provider = TwelveDataProvider(
+        api_key="KEY", session=session, min_seconds_between_requests=0.01, verify_consistency=False
+    )
 
     with patch("goldsignal.data.twelvedata_provider.time.sleep"):
         candles = provider.get_candles("XAUUSD", Timeframe.M5, start, end)
@@ -218,8 +222,54 @@ def test_pagination_dedupes_overlapping_boundary_candle():
 
 def test_no_pagination_for_span_within_single_request_cap():
     session = _session_returning(_response(body=_body([_row(START, 2000)])))
-    provider = TwelveDataProvider(api_key="KEY", session=session)
+    provider = TwelveDataProvider(api_key="KEY", session=session, verify_consistency=False)
     with patch("goldsignal.data.twelvedata_provider.time.sleep") as mock_sleep:
         provider.get_candles("XAUUSD", Timeframe.M5, START, END)
     assert session.get.call_count == 1
     mock_sleep.assert_not_called()
+
+
+def test_consistency_check_passes_when_spot_checks_agree():
+    rows = [_row(START + timedelta(minutes=5 * i), 2000 + i) for i in range(3)]
+    bulk_response = _response(body=_body(rows))
+    # One spot-check response per sample point (indices 0, 1, 2 -> all three, since n=3)
+    spot_responses = [_response(body=_body([r])) for r in rows]
+    session = _session_returning(bulk_response, *spot_responses)
+    provider = TwelveDataProvider(api_key="KEY", session=session, min_seconds_between_requests=0.01)
+
+    with patch("goldsignal.data.twelvedata_provider.time.sleep"):
+        candles = provider.get_candles("XAUUSD", Timeframe.M5, START, END)
+
+    assert len(candles) == 3
+    assert session.get.call_count == 4  # 1 bulk + 3 spot-checks
+
+
+def test_consistency_check_raises_on_disagreement():
+    rows = [_row(START + timedelta(minutes=5 * i), 2000 + i) for i in range(3)]
+    bulk_response = _response(body=_body(rows))
+    # Spot-checks agree for indices 0 and 1, but wildly disagree for the last one
+    mismatched_row = _row(START + timedelta(minutes=10), 9999)  # same timestamp as rows[2]
+    spot_responses = [
+        _response(body=_body([rows[0]])),
+        _response(body=_body([rows[1]])),
+        _response(body=_body([mismatched_row])),
+    ]
+    session = _session_returning(bulk_response, *spot_responses)
+    provider = TwelveDataProvider(api_key="KEY", session=session, min_seconds_between_requests=0.01)
+
+    with patch("goldsignal.data.twelvedata_provider.time.sleep"):
+        with pytest.raises(DataProviderError, match="consistency check failed"):
+            provider.get_candles("XAUUSD", Timeframe.M5, START, END)
+
+
+def test_consistency_check_skips_gracefully_when_spot_check_is_empty():
+    rows = [_row(START, 2000)]
+    bulk_response = _response(body=_body(rows))
+    empty_spot = _response(body=_body([]))
+    session = _session_returning(bulk_response, empty_spot)
+    provider = TwelveDataProvider(api_key="KEY", session=session, min_seconds_between_requests=0.01)
+
+    with patch("goldsignal.data.twelvedata_provider.time.sleep"):
+        candles = provider.get_candles("XAUUSD", Timeframe.M5, START, END)
+
+    assert len(candles) == 1  # no exception despite being unable to verify

@@ -21,6 +21,14 @@ partial or fabricated data.
 date range needing more candles than that is transparently paginated as
 several requests (each safely under the cap), paced to stay under the
 free tier's 8-requests/minute limit, then merged/deduped/sorted.
+
+Consistency safeguard: after assembling a result, a few sample points
+(first/middle/last candle) are independently re-fetched and compared
+against the bulk result. If they disagree beyond a generous tolerance,
+the whole batch is rejected with DataProviderError rather than silently
+used — this was added after TwelveData was observed, mid-session, to
+serve a historical XAU/USD range at roughly half its real price level,
+self-correcting a few hours later with no error or warning of any kind.
 """
 
 from __future__ import annotations
@@ -50,14 +58,20 @@ _TIMEFRAME_TO_INTERVAL = {
 
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 _MAX_ATTEMPTS = 3
-_RETRY_BACKOFF_SECONDS = 2.0
+_RETRY_BACKOFF_SECONDS = 15.0
 
 # TwelveData documents outputsize as capped at 5000 rows per request. A
 # wide date range needing more candles than that is paginated as several
 # requests, each safely under the cap, paced to stay under the free
-# tier's 8-requests/minute limit.
+# tier's 8-requests/minute limit. Backoff on 429 is deliberately patient
+# (15s/30s/45s) since a per-minute cap needs to actually roll over, not
+# just a brief pause.
 _MAX_CANDLES_PER_REQUEST = 4900
-_DEFAULT_MIN_SECONDS_BETWEEN_REQUESTS = 8.0
+_DEFAULT_MIN_SECONDS_BETWEEN_REQUESTS = 10.0
+
+# Generous — well above normal rounding/timing noise, but would have
+# immediately caught the ~80% discrepancy that motivated this check.
+_CONSISTENCY_TOLERANCE_FRACTION = 0.05
 
 
 class DataProviderError(RuntimeError):
@@ -77,12 +91,14 @@ class TwelveDataProvider:
         *,
         session: requests.Session | None = None,
         min_seconds_between_requests: float = _DEFAULT_MIN_SECONDS_BETWEEN_REQUESTS,
+        verify_consistency: bool = True,
     ):
         if not api_key:
             raise ValueError("api_key must not be empty")
         self._api_key = api_key
         self._session = session or requests.Session()
         self._min_seconds_between_requests = min_seconds_between_requests
+        self._verify_consistency_enabled = verify_consistency
 
     def get_candles(
         self,
@@ -96,21 +112,56 @@ class TwelveDataProvider:
 
         max_span = timeframe.duration * _MAX_CANDLES_PER_REQUEST
         if end - start <= max_span:
-            return self._get_candles_page(instrument, timeframe, start, end)
+            candles = self._get_candles_page(instrument, timeframe, start, end)
+        else:
+            candles_by_timestamp: dict[datetime, Candle] = {}
+            chunk_start = start
+            first_request = True
+            while chunk_start < end:
+                if not first_request:
+                    time.sleep(self._min_seconds_between_requests)
+                first_request = False
+                chunk_end = min(chunk_start + max_span, end)
+                for c in self._get_candles_page(instrument, timeframe, chunk_start, chunk_end):
+                    candles_by_timestamp[c.timestamp] = c
+                chunk_start = chunk_end
+            candles = sorted(candles_by_timestamp.values(), key=lambda c: c.timestamp)
 
-        candles_by_timestamp: dict[datetime, Candle] = {}
-        chunk_start = start
-        first_request = True
-        while chunk_start < end:
-            if not first_request:
-                time.sleep(self._min_seconds_between_requests)
-            first_request = False
-            chunk_end = min(chunk_start + max_span, end)
-            for c in self._get_candles_page(instrument, timeframe, chunk_start, chunk_end):
-                candles_by_timestamp[c.timestamp] = c
-            chunk_start = chunk_end
+        if self._verify_consistency_enabled and candles:
+            self._verify_consistency(instrument, timeframe, candles)
 
-        return sorted(candles_by_timestamp.values(), key=lambda c: c.timestamp)
+        return candles
+
+    def _verify_consistency(
+        self, instrument: str, timeframe: Timeframe, candles: list[Candle]
+    ) -> None:
+        """Independently re-fetch a few sample points and compare against
+        the bulk result. Raises DataProviderError on disagreement rather
+        than silently returning data that might be wrong.
+        """
+        n = len(candles)
+        sample_indices = sorted({0, n // 2, n - 1})
+        for idx in sample_indices:
+            target = candles[idx]
+            time.sleep(self._min_seconds_between_requests)
+            spot = self._get_candles_page(
+                instrument, timeframe, target.timestamp, target.timestamp + timeframe.duration
+            )
+            spot_candle = next((c for c in spot if c.timestamp == target.timestamp), None)
+            if spot_candle is None:
+                continue  # couldn't independently verify this point; don't fail on that alone
+
+            reference = max(abs(target.close), 1e-9)
+            diff_fraction = abs(spot_candle.close - target.close) / reference
+            if diff_fraction > _CONSISTENCY_TOLERANCE_FRACTION:
+                raise DataProviderError(
+                    f"Data consistency check failed for {instrument} {timeframe.value} at "
+                    f"{target.timestamp.isoformat()}: bulk-fetched close={target.close:.4f} but "
+                    f"a fresh spot-check close={spot_candle.close:.4f} "
+                    f"({diff_fraction:.1%} apart, exceeds {_CONSISTENCY_TOLERANCE_FRACTION:.0%} "
+                    "tolerance) — the provider may be returning inconsistent historical data; "
+                    "refusing to use this batch."
+                )
 
     def _get_candles_page(
         self,
