@@ -1,4 +1,11 @@
-"""Day-trade strategy: 15-minute entries confirmed on the 1-hour chart."""
+"""Day-trade strategy: 15-minute entries confirmed on the 1-hour chart.
+
+UNVALIDATED — not backtested against real history this session (the scalp
+mode of this same rule was, and was rejected; see docs/baseline_rejection.md).
+`config.actionable_alerts_enabled` defaults to False pending that evidence,
+not because this specific mode is known to lose money -- it's simply
+unproven either way.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +21,8 @@ STRATEGY_VERSION = "daytrade_ema_rsi_atr_v1"
 
 
 class DayTradeStrategy:
+    """UNVALIDATED — see module docstring."""
+
     mode = StrategyMode.DAY_TRADE
     version = STRATEGY_VERSION
 

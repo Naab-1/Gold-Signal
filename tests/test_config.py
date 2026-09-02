@@ -55,6 +55,20 @@ def test_daytrade_defaults_use_15m_1h():
     assert c.confirmation_timeframe == Timeframe.H1
 
 
+def test_actionable_alerts_disabled_by_default_for_both_modes():
+    # Real backtests found this baseline's out-of-sample expectancy
+    # negative or not credibly positive on every tested instrument -- see
+    # docs/baseline_rejection.md. Safe-by-default until a validated
+    # replacement explicitly re-enables this.
+    assert load_scalp_config({}).actionable_alerts_enabled is False
+    assert load_daytrade_config({}).actionable_alerts_enabled is False
+
+
+def test_actionable_alerts_can_be_explicitly_enabled():
+    c = load_scalp_config({"GOLDSIGNAL_SCALP_ACTIONABLE_ALERTS_ENABLED": "true"})
+    assert c.actionable_alerts_enabled is True
+
+
 def test_modes_are_independently_configurable():
     scalp = load_scalp_config({"GOLDSIGNAL_SCALP_ATR_STOP_MULTIPLIER": "9.0"})
     daytrade = load_daytrade_config({})

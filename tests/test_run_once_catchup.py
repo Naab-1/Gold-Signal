@@ -237,7 +237,10 @@ def test_every_closed_candle_across_a_4_hour_gap_is_evaluated_exactly_once(monke
 
 
 def test_duplicate_invocation_sends_exactly_one_alert(monkeypatch, _mock_telegram):
-    config = load_scalp_config({})
+    # This test is about idempotent-send infrastructure, not strategy
+    # validation, so it explicitly opts into actionable alerts -- the
+    # config default is now False (see docs/baseline_rejection.md).
+    config = load_scalp_config({"GOLDSIGNAL_SCALP_ACTIONABLE_ALERTS_ENABLED": "true"})
     entry, confirm = _candles(config)
     signal_close_time = entry[50].timestamp + config.entry_timeframe.duration
     buy_signal = _buy_signal_at(signal_close_time)
@@ -347,3 +350,43 @@ def test_signal_no_longer_actionable_is_marked_missed_not_sent_live(monkeypatch,
     assert fake_signals.rows[expired_signal.signal_id]["telegram_sent"] is False
     assert len(_mock_telegram["trade"]) == 0
     assert len(_mock_telegram["missed"]) == 1
+
+
+def test_actionable_alert_suppressed_by_default_but_still_recorded(monkeypatch, _mock_telegram):
+    """Phase 1 safety freeze: with the default config (actionable_alerts_enabled
+    is False for an unvalidated baseline), a real, still-actionable BUY signal
+    must be saved and dedup/actionability-checked as normal, but must never
+    reach send_signal_alert.
+    """
+    config = load_scalp_config({})  # default: actionable_alerts_enabled=False
+    entry, confirm = _candles(config)
+    signal_close_time = entry[50].timestamp + config.entry_timeframe.duration
+    buy_signal = _buy_signal_at(signal_close_time)
+    strategy = ScriptedStrategy(config, "XAUUSD", {signal_close_time: buy_signal})
+
+    fake_checkpoints = FakeCheckpoints()
+    fake_signals = FakeSignalsRepo()
+    monkeypatch.setattr(run_once_module, "checkpoints_repo", fake_checkpoints)
+    monkeypatch.setattr(run_once_module, "signals_repo", fake_signals)
+
+    settings = _settings()
+    key = run_once_module._checkpoint_key(settings, config, strategy)
+    fake_checkpoints.store[key] = signal_close_time - config.entry_timeframe.duration
+
+    class FixedProvider:
+        def get_candles(self, instrument, timeframe, start, end):
+            return entry if timeframe == config.entry_timeframe else confirm
+
+    run_once_module._run_catchup(
+        conn=None,
+        settings=settings,
+        config=config,
+        strategy=strategy,
+        provider=FixedProvider(),
+        wall_clock_now=signal_close_time,
+    )
+
+    assert buy_signal.signal_id in fake_signals.rows  # still recorded
+    assert fake_signals.rows[buy_signal.signal_id]["telegram_sent"] is False
+    assert len(_mock_telegram["trade"]) == 0
+    assert len(_mock_telegram["missed"]) == 0  # not "missed" either -- suppressed, not late

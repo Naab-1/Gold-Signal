@@ -98,6 +98,15 @@ class ModeConfig:
     continuation_confirmation_tolerance_atr_fraction: float
     a_tier_min_net_reward_r: float
 
+    # Real 2-year (gold) / 180-day (EUR/USD, GBP/USD, USD/JPY) backtests
+    # found this rule's out-of-sample expectancy negative or not credibly
+    # positive after realistic costs on every tested instrument -- see
+    # docs/baseline_rejection.md. Defaults to False (no actionable BUY/SELL
+    # Telegram alerts) until a specific instrument/mode combination has
+    # documented evidence of positive, cost-robust out-of-sample expectancy.
+    # NO_TRADE, missed-setup, and scheduler-health messages are unaffected.
+    actionable_alerts_enabled: bool
+
 
 _GLOBAL_DEFAULTS: dict[str, str] = {
     "DATA_PROVIDER": "mock",
@@ -146,6 +155,7 @@ _SCALP_DEFAULTS: dict[str, str] = {
     "CONTINUATION_MAX_RANGE_ATR_MULTIPLE": "2.0",
     "CONTINUATION_CONFIRMATION_TOLERANCE_ATR_FRACTION": "0.10",
     "A_TIER_MIN_NET_REWARD_R": "1.5",
+    "ACTIONABLE_ALERTS_ENABLED": "false",
 }
 
 # Day-trade: 15m entries confirmed on 1h structure/trend.
@@ -184,6 +194,7 @@ _DAYTRADE_DEFAULTS: dict[str, str] = {
     "CONTINUATION_MAX_RANGE_ATR_MULTIPLE": "2.0",
     "CONTINUATION_CONFIRMATION_TOLERANCE_ATR_FRACTION": "0.10",
     "A_TIER_MIN_NET_REWARD_R": "1.5",
+    "ACTIONABLE_ALERTS_ENABLED": "false",
 }
 
 
@@ -398,6 +409,10 @@ def load_mode_config(
         ),
         a_tier_min_net_reward_r=_parse_float(
             _get(env, p, "A_TIER_MIN_NET_REWARD_R", defaults), var("A_TIER_MIN_NET_REWARD_R")
+        ),
+        actionable_alerts_enabled=_parse_bool(
+            _get(env, p, "ACTIONABLE_ALERTS_ENABLED", defaults),
+            var("ACTIONABLE_ALERTS_ENABLED"),
         ),
     )
     _validate_mode_config(config, p)

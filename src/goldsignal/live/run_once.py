@@ -79,6 +79,7 @@ def _checkpoint_key(
 def _handle_evaluated_signal(
     conn,
     settings: GlobalSettings,
+    config: ModeConfig,
     signal: StrategySignal,
     *,
     is_late: bool,
@@ -119,6 +120,21 @@ def _handle_evaluated_signal(
                 bot_token=settings.telegram_bot_token,
                 chat_id=settings.telegram_chat_id,
             )
+        return
+
+    if not config.actionable_alerts_enabled:
+        # Baseline rejected: real backtests found this strategy's
+        # out-of-sample expectancy negative or not credibly positive after
+        # realistic costs -- see docs/baseline_rejection.md. The signal is
+        # still saved and dedup/actionability-checked above so nothing is
+        # lost, it just never becomes a live "act on this" Telegram alert
+        # until a validated replacement re-enables this per mode/instrument.
+        logger.info(
+            "mode=%s signal_id=%s actionable_alerts_enabled=false (unvalidated baseline) "
+            "-- recorded, not sent",
+            signal.strategy_mode.value,
+            signal.signal_id,
+        )
         return
 
     if not (settings.telegram_bot_token and settings.telegram_chat_id):
@@ -199,6 +215,7 @@ def _run_catchup(
             _handle_evaluated_signal(
                 conn,
                 settings,
+                config,
                 signal,
                 is_late=item.is_late,
                 latest_price=item.entry_window[-1].close,
