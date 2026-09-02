@@ -344,3 +344,35 @@ def test_get_quote_uses_symbol_with_slash():
     provider.get_quote("USDJPY")
     called_params = session.get.call_args.kwargs["params"]
     assert called_params["symbol"] == "USD/JPY"
+
+
+def test_connection_timeout_is_retried_then_succeeds():
+    import requests as _requests
+
+    session = MagicMock()
+    body = {"close": "2450.55", "timestamp": 1705320000, "is_market_open": True}
+    session.get.side_effect = [
+        _requests.exceptions.ConnectTimeout("boom"),
+        _response(body=body),
+    ]
+    provider = TwelveDataProvider(api_key="KEY", session=session, verify_consistency=False)
+
+    with patch("goldsignal.data.twelvedata_provider.time.sleep"):
+        quote = provider.get_quote("XAUUSD")
+
+    assert quote.last_price == 2450.55
+    assert session.get.call_count == 2
+
+
+def test_connection_timeout_exhausts_retries_and_raises():
+    import requests as _requests
+
+    session = MagicMock()
+    session.get.side_effect = _requests.exceptions.ReadTimeout("boom")
+    provider = TwelveDataProvider(api_key="KEY", session=session, verify_consistency=False)
+
+    with patch("goldsignal.data.twelvedata_provider.time.sleep"):
+        with pytest.raises(DataProviderError):
+            provider.get_quote("XAUUSD")
+
+    assert session.get.call_count == 3

@@ -241,7 +241,23 @@ class TwelveDataProvider:
     def _request(self, url: str, params: dict) -> dict:
         last_error: Exception | None = None
         for attempt in range(1, _MAX_ATTEMPTS + 1):
-            response = self._session.get(url, params=params, timeout=15)
+            try:
+                response = self._session.get(url, params=params, timeout=15)
+            except requests.exceptions.RequestException as exc:
+                # A connection-level failure (timeout, reset, DNS) never
+                # reached a response at all -- retry it exactly like a
+                # retryable HTTP status, rather than crashing immediately.
+                masked_url = _mask(url, self._api_key)
+                last_error = DataProviderError(
+                    f"TwelveData request failed with {exc.__class__.__name__} "
+                    f"(attempt {attempt}/{_MAX_ATTEMPTS}): {masked_url}"
+                )
+                logger.warning(str(last_error))
+                if attempt < _MAX_ATTEMPTS:
+                    time.sleep(_RETRY_BACKOFF_SECONDS * attempt)
+                    continue
+                raise last_error from exc
+
             masked_url = _mask(response.url, self._api_key)
 
             if response.status_code in _RETRYABLE_STATUS_CODES:
