@@ -50,10 +50,10 @@ toggles/history (Phase 4).
 
 ### Automatic checks (GitHub Actions)
 
-`.github/workflows/check-signals.yml` runs both modes automatically
-every 15 minutes via GitHub Actions, once the repo has these secrets set
-(Settings → Secrets and variables → Actions → New repository secret —
-same 4 values as your local `.env`):
+`.github/workflows/check-signals.yml` runs both modes automatically via
+GitHub Actions, once the repo has these secrets set (Settings → Secrets
+and variables → Actions → New repository secret — same 4 values as your
+local `.env`):
 
 ```
 GOLDSIGNAL_TWELVEDATA_API_KEY
@@ -63,7 +63,83 @@ GOLDSIGNAL_DATABASE_URL
 ```
 
 You can also trigger it manually from the repo's **Actions** tab (the
-"Run workflow" button) without waiting for the schedule, to test it.
+"Run workflow" button), to test it.
+
+#### Scheduler reliability
+
+GitHub's own `schedule:` cron is kept as a free backup trigger, but it is
+**not reliable enough on its own** for a 5-minute scalp timeframe — a real
+gap of 4h43m between two "every 15 minutes" runs was observed in
+practice. Two things address this:
+
+1. **Durable catch-up processing.** `live/run_once.py` no longer just asks
+   "is there a signal right now?" — it persists a checkpoint (the last
+   successfully processed closed candle, per strategy/version/timeframe/
+   provider) and walks every closed candle since then, oldest first,
+   alerting on each exactly once. A scheduler gap of any length gets
+   fully caught up on the next run instead of silently losing whatever
+   happened during the gap. See "How the catch-up scan works" below.
+2. **A more reliable external trigger.** The workflow now also accepts a
+   `repository_dispatch` event (type `"scan"`), which any external
+   always-on pinger can fire with a plain authenticated HTTPS POST — this
+   is what should actually drive 5-minute-or-better cadence, not GitHub's
+   internal cron. To set one up (free, using
+   [cron-job.org](https://cron-job.org), swappable for any similar
+   service since the trigger is just an HTTP call):
+   1. Create a GitHub **fine-grained personal access token**
+      (Settings → Developer settings → Personal access tokens → Fine-grained
+      tokens) scoped to **only this repository**, with **Contents:
+      Read and write** permission (that's what `repository_dispatch`
+      requires) and nothing else.
+   2. Sign up at cron-job.org (or any HTTP-cron service) and create a job:
+      - URL: `https://api.github.com/repos/Naab-1/Gold-Signal/dispatches`
+      - Method: `POST`
+      - Schedule: every 3–5 minutes
+      - Headers: `Authorization: Bearer <your fine-grained token>`,
+        `Accept: application/vnd.github+json`,
+        `Content-Type: application/json`
+      - Body: `{"event_type": "scan"}`
+   3. That's it — the token lives only in cron-job.org's own config, never
+      in this repo. Swapping to a different pinger later is a config
+      change on that service, not a code change here.
+
+Because catch-up processing is idempotent, it's safe to run both triggers
+side by side, or to have them overlap — nothing gets double-sent, and
+nothing gets silently skipped.
+
+#### How the catch-up scan works
+
+- A checkpoint is kept per (strategy, strategy version, entry timeframe,
+  data provider, instrument) in `scan_checkpoints`.
+- Every run fetches candles from the checkpoint (plus indicator warm-up)
+  through now, finds every **fully closed** candle after the checkpoint,
+  and evaluates them **chronologically, oldest first** — the checkpoint
+  only advances after a candle's evaluation, persistence, and (if
+  actionable) alerting all succeed. A failure partway through a sweep
+  leaves the checkpoint at the last success, so the failed candle is
+  retried on the next run rather than skipped.
+- Every stored row's `signal_id` already encodes instrument + mode +
+  timeframe + candle timestamp + direction + strategy version, so
+  reprocessing the same candle is a harmless no-op (`ON CONFLICT DO
+  NOTHING`). Telegram sends are separately idempotent via a
+  claim-before-send column (`telegram_sent_at`) — a retry can never
+  double-send.
+- A signal discovered late (its candle closed some time ago, not just
+  now) is checked against the current price before alerting
+  (`strategy/actionability.py`): if price already ran past the stop or a
+  target, or the setup's own expiration already passed, it's recorded as
+  `missed_reason` and — if Telegram is configured — sent as a distinct
+  "⚠️ SETUP DETECTED LATE — DO NOT ENTER" notice, never as a live entry.
+- Scheduler/data-feed health is tracked in `scheduler_runs` and
+  `scheduler_alert_state`: if two expected 5-minute scan intervals
+  (10 minutes) pass without a successful run, a "🛑 SYSTEM HEALTH" notice
+  is sent once (not every run while still down); a "✅ SYSTEM RECOVERED"
+  notice fires once when it clears. Both are visually and structurally
+  distinct from trade alerts and never confused with one.
+- Only the existing strict A+ tier is ever sent to Telegram here. The
+  A/WATCHLIST classification work (`strategy/classification.py`) is not
+  wired into this pipeline — that's deliberately deferred until its
+  out-of-sample backtest results justify activation.
 
 Run a backtest (still mock data only — see Known Limitations):
 

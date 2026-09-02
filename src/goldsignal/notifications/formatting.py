@@ -55,6 +55,39 @@ def format_trade_signal(signal: StrategySignal) -> str:
     return "\n".join(lines)
 
 
+def format_missed_setup(signal: StrategySignal, *, reason: str, delay: str) -> str:
+    """A distinct message shape from `format_trade_signal` — this must
+    never be mistaken for a live, actionable entry.
+    """
+    mode = _MODE_LABELS[signal.strategy_mode]
+    lines = [
+        f"⚠️ SETUP DETECTED LATE — DO NOT ENTER ({mode}, {signal.instrument})",
+        _time_lines(signal),
+        f"Original setup: {signal.direction.value} @ {signal.entry_price:,.2f}",
+        f"Reason no longer actionable: {reason}",
+        f"Detected {delay} after it formed — too late to act on.",
+        "",
+        DISCLAIMER,
+    ]
+    return "\n".join(lines)
+
+
+def format_health_alert(*, strategy_mode_label: str, gap: str) -> str:
+    return (
+        f"🛑 SYSTEM HEALTH — {strategy_mode_label}\n"
+        f"No successful scan in {gap}.\n"
+        "This is a system status notice, not a trading signal — no action needed on price."
+    )
+
+
+def format_recovery_alert(*, strategy_mode_label: str, gap: str) -> str:
+    return (
+        f"✅ SYSTEM RECOVERED — {strategy_mode_label}\n"
+        f"Scanning resumed after a {gap} gap; any missed candles have been processed.\n"
+        "This is a system status notice, not a trading signal."
+    )
+
+
 def format_no_trade_signal(signal: StrategySignal) -> str:
     if signal.direction != SignalDirection.NO_TRADE:
         raise ValueError("format_no_trade_signal is only for NO_TRADE signals")

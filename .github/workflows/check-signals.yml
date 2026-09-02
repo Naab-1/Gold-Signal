@@ -1,8 +1,22 @@
 name: Check GoldSignal signals
 
+# GitHub's own `schedule:` cron does not reliably fire every 15 minutes —
+# confirmed in practice (a real ~4h43m gap was observed between two
+# scheduled runs). It's kept below only as a free, best-effort backup.
+# The real, reliable trigger is `repository_dispatch` (type "scan"), fired
+# by an external always-on pinger (see README's "Scheduler reliability"
+# section) at least once every 5 minutes. That pinger is a plain
+# authenticated HTTPS POST to GitHub's dispatches API — any service able
+# to make one can drive this workflow, so the scheduler is fully
+# replaceable without touching this file. The run_once catch-up logic
+# (persistence.checkpoints_repo) makes it safe for both triggers, or
+# overlapping/duplicate invocations of either, to fire at once: every
+# closed candle is still evaluated and alerted on exactly once.
 on:
   schedule:
     - cron: "*/15 * * * *"
+  repository_dispatch:
+    types: [scan]
   workflow_dispatch: {}
 
 jobs:

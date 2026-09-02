@@ -54,7 +54,16 @@ def is_duplicate(new: SignalFingerprint, last: LastSignalRecord | None) -> bool:
     )
 
 
-def save_signal(conn: psycopg.Connection, signal: StrategySignal) -> None:
+def save_signal(
+    conn: psycopg.Connection, signal: StrategySignal, *, detected_late: bool = False
+) -> None:
+    """Idempotent: `ON CONFLICT (signal_id) DO NOTHING` means reprocessing
+    the same closed candle (a scheduler retry, or a catch-up sweep
+    re-covering a candle it already saw) is a harmless no-op — the row's
+    signal_id already encodes instrument+mode+timeframe+candle
+    timestamp+direction+version, so it doubles as the "was this candle
+    already evaluated" idempotency key.
+    """
     targets_json = json.dumps(
         [{"label": t.label, "price": t.price, "r_multiple": t.r_multiple} for t in signal.targets]
     )
@@ -64,8 +73,8 @@ def save_signal(conn: psycopg.Connection, signal: StrategySignal) -> None:
             INSERT INTO signals (
                 signal_id, instrument, strategy_mode, strategy_version, direction,
                 entry_timeframe, confirmation_timeframe, signal_timestamp,
-                entry_price, stop_loss, targets_json, confidence_score, reason
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                entry_price, stop_loss, targets_json, confidence_score, reason, detected_late
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (signal_id) DO NOTHING
             """,
             (
@@ -82,9 +91,73 @@ def save_signal(conn: psycopg.Connection, signal: StrategySignal) -> None:
                 targets_json,
                 signal.confidence_score,
                 signal.reason,
+                detected_late,
             ),
         )
     conn.commit()
+
+
+def claim_telegram_send(conn: psycopg.Connection, signal_id: str) -> bool:
+    """Atomically claim the right to send this signal's Telegram alert.
+    Returns True if this call won the claim (telegram_sent_at was NULL and
+    is now set), False if another attempt already claimed/sent it — the
+    caller must send only when this returns True, so retries (duplicate
+    invocations re-processing the same candle) send at most once.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE signals SET telegram_sent_at = now()
+            WHERE signal_id = %s AND telegram_sent_at IS NULL
+            RETURNING signal_id
+            """,
+            (signal_id,),
+        )
+        won = cur.fetchone() is not None
+    conn.commit()
+    return won
+
+
+def unclaim_telegram_send(conn: psycopg.Connection, signal_id: str) -> None:
+    """Release a claim after the actual Telegram send failed, so a later
+    retry attempts delivery again instead of believing it already went out.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE signals SET telegram_sent_at = NULL WHERE signal_id = %s",
+            (signal_id,),
+        )
+    conn.commit()
+
+
+def mark_missed(conn: psycopg.Connection, signal_id: str, *, reason: str) -> None:
+    """Record that a signal was discovered during a catch-up sweep but was
+    no longer actionable by the time it was found (price already past the
+    stop/a target, or the setup expired) — it must never be sent as a live
+    entry.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE signals SET missed_reason = %s WHERE signal_id = %s",
+            (reason, signal_id),
+        )
+    conn.commit()
+
+
+def count_missed_since(
+    conn: psycopg.Connection, *, strategy_mode: str, instrument: str, since: datetime
+) -> int:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COUNT(*) FROM signals
+            WHERE strategy_mode = %s AND instrument = %s
+              AND missed_reason IS NOT NULL AND signal_timestamp >= %s
+            """,
+            (strategy_mode, instrument, since),
+        )
+        (count,) = cur.fetchone()
+    return count
 
 
 def get_last_trade_signal(
