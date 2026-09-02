@@ -99,3 +99,28 @@ def test_no_candles_returns_zeroed_report():
     report = analyze_frequency(strategy, entry[:1], confirm, instrument="XAUUSD")
     assert report.total_candles == 0
     assert report.funnel["final_signals"] == 0
+
+
+def test_max_signals_per_session_resets_daily_not_once_for_the_whole_test():
+    """Regression test: max_signals_per_session is a *daily* cap in
+    production. Before this fix, analyze_frequency's EvaluationContext was
+    never reset between days, so signals_emitted_this_session accumulated
+    across the entire test period -- the first `max_signals_per_session`
+    signals, EVER, permanently tripped SESSION_LIMIT_BLOCKED for every
+    candle afterward, no matter how much history remained. Setting the cap
+    to 1 makes this unmistakable: if the bug were present, at most 1
+    signal would ever be found across the whole multi-week series.
+    """
+    overrides = dict(_LOOSE_OVERRIDES)
+    overrides["MAX_SIGNALS_PER_SESSION"] = "1"
+    env = {f"GOLDSIGNAL_SCALP_{k}": v for k, v in overrides.items()}
+    config = load_scalp_config(env)
+    strategy = ScalpStrategy(config, "XAUUSD")
+    provider = MockDataProvider(seed=3, base_price=2400.0, volatility=6.0)
+    end = START + config.entry_timeframe.duration * 4000  # spans many trading days
+    entry = provider.get_candles("XAUUSD", config.entry_timeframe, START, end)
+    confirm = provider.get_candles("XAUUSD", config.confirmation_timeframe, START, end)
+
+    report = analyze_frequency(strategy, entry, confirm, instrument="XAUUSD")
+
+    assert report.funnel["final_signals"] > 1

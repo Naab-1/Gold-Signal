@@ -12,7 +12,7 @@ from __future__ import annotations
 import bisect
 import dataclasses
 from collections import Counter
-from datetime import datetime
+from datetime import date, datetime
 
 from goldsignal.backtest.split import split_cutoff_timestamp
 from goldsignal.models.candle import Candle
@@ -70,6 +70,7 @@ def analyze_frequency(
         config, estimated_spread=0.0, estimated_slippage=0.0, estimated_transaction_cost=0.0
     )
     zero_cost_context = EvaluationContext()
+    session_date: date | None = None
 
     stage_counts: Counter[str] = Counter()
     rejection_counts_single: Counter[str] = Counter()
@@ -91,6 +92,25 @@ def analyze_frequency(
     for i in range(min_entry_index, len(entry_candles) - 1):
         signal_candle = entry_candles[i]
         as_of = signal_candle.timestamp + entry_duration
+
+        # max_signals_per_session is a *daily* cap in production (see
+        # live/run_once.py and tier_comparison.py's identical reset) --
+        # without resetting signals_emitted_this_session at each new day,
+        # it instead becomes a one-time, whole-test-lifetime cap: the
+        # first max_signals_per_session real signals across the entire
+        # multi-month/year run permanently trip SESSION_LIMIT_BLOCKED for
+        # every candle afterward, making the reported frequency collapse
+        # to roughly that config value regardless of how much history
+        # remains. This under-reported real signal frequency by close to
+        # an order of magnitude before being caught.
+        current_date = as_of.date()
+        if session_date != current_date:
+            session_date = current_date
+            context = EvaluationContext(last_signal_time=context.last_signal_time)
+            zero_cost_context = EvaluationContext(
+                last_signal_time=zero_cost_context.last_signal_time
+            )
+
         window = entry_candles[: i + 1]
         confirm_idx = bisect.bisect_right(confirm_close_times, as_of)
         confirm_window = confirmation_candles[:confirm_idx]
