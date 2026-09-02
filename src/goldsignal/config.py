@@ -89,6 +89,15 @@ class ModeConfig:
     breakeven_trigger: BreakevenTrigger
     breakeven_after_r_multiple: float | None
 
+    # Two-Candle Breakout Continuation rule (the "A" tier) — an alternative
+    # to breakout/retest, experimental until independently backtested.
+    continuation_breakout_min_atr_multiple: float
+    continuation_min_body_ratio: float
+    continuation_close_position_ratio: float
+    continuation_max_range_atr_multiple: float
+    continuation_confirmation_tolerance_atr_fraction: float
+    a_tier_min_net_reward_r: float
+
 
 _GLOBAL_DEFAULTS: dict[str, str] = {
     "DATA_PROVIDER": "mock",
@@ -131,6 +140,12 @@ _SCALP_DEFAULTS: dict[str, str] = {
     "TP_SHORTFALL_HANDLING": "normalize",
     "BREAKEVEN_TRIGGER": "none",
     "BREAKEVEN_AFTER_R_MULTIPLE": "",
+    "CONTINUATION_BREAKOUT_MIN_ATR_MULTIPLE": "0.10",
+    "CONTINUATION_MIN_BODY_RATIO": "0.60",
+    "CONTINUATION_CLOSE_POSITION_RATIO": "0.25",
+    "CONTINUATION_MAX_RANGE_ATR_MULTIPLE": "2.0",
+    "CONTINUATION_CONFIRMATION_TOLERANCE_ATR_FRACTION": "0.10",
+    "A_TIER_MIN_NET_REWARD_R": "1.5",
 }
 
 # Day-trade: 15m entries confirmed on 1h structure/trend.
@@ -163,6 +178,12 @@ _DAYTRADE_DEFAULTS: dict[str, str] = {
     "TP_SHORTFALL_HANDLING": "normalize",
     "BREAKEVEN_TRIGGER": "none",
     "BREAKEVEN_AFTER_R_MULTIPLE": "",
+    "CONTINUATION_BREAKOUT_MIN_ATR_MULTIPLE": "0.10",
+    "CONTINUATION_MIN_BODY_RATIO": "0.60",
+    "CONTINUATION_CLOSE_POSITION_RATIO": "0.25",
+    "CONTINUATION_MAX_RANGE_ATR_MULTIPLE": "2.0",
+    "CONTINUATION_CONFIRMATION_TOLERANCE_ATR_FRACTION": "0.10",
+    "A_TIER_MIN_NET_REWARD_R": "1.5",
 }
 
 
@@ -355,6 +376,29 @@ def load_mode_config(
         tp_shortfall_handling=shortfall,
         breakeven_trigger=breakeven_trigger,
         breakeven_after_r_multiple=breakeven_after_r_multiple,
+        continuation_breakout_min_atr_multiple=_parse_float(
+            _get(env, p, "CONTINUATION_BREAKOUT_MIN_ATR_MULTIPLE", defaults),
+            var("CONTINUATION_BREAKOUT_MIN_ATR_MULTIPLE"),
+        ),
+        continuation_min_body_ratio=_parse_float(
+            _get(env, p, "CONTINUATION_MIN_BODY_RATIO", defaults),
+            var("CONTINUATION_MIN_BODY_RATIO"),
+        ),
+        continuation_close_position_ratio=_parse_float(
+            _get(env, p, "CONTINUATION_CLOSE_POSITION_RATIO", defaults),
+            var("CONTINUATION_CLOSE_POSITION_RATIO"),
+        ),
+        continuation_max_range_atr_multiple=_parse_float(
+            _get(env, p, "CONTINUATION_MAX_RANGE_ATR_MULTIPLE", defaults),
+            var("CONTINUATION_MAX_RANGE_ATR_MULTIPLE"),
+        ),
+        continuation_confirmation_tolerance_atr_fraction=_parse_float(
+            _get(env, p, "CONTINUATION_CONFIRMATION_TOLERANCE_ATR_FRACTION", defaults),
+            var("CONTINUATION_CONFIRMATION_TOLERANCE_ATR_FRACTION"),
+        ),
+        a_tier_min_net_reward_r=_parse_float(
+            _get(env, p, "A_TIER_MIN_NET_REWARD_R", defaults), var("A_TIER_MIN_NET_REWARD_R")
+        ),
     )
     _validate_mode_config(config, p)
     return config
@@ -413,6 +457,20 @@ def _validate_mode_config(c: ModeConfig, mode_prefix: str) -> None:
         raise ConfigError(f"{var('MAX_SIGNALS_PER_SESSION')} must be positive")
     if c.setup_expiration_candles <= 0:
         raise ConfigError(f"{var('SETUP_EXPIRATION_CANDLES')} must be positive")
+    if c.continuation_breakout_min_atr_multiple < 0:
+        raise ConfigError(f"{var('CONTINUATION_BREAKOUT_MIN_ATR_MULTIPLE')} must not be negative")
+    if not 0 < c.continuation_min_body_ratio <= 1:
+        raise ConfigError(f"{var('CONTINUATION_MIN_BODY_RATIO')} must be within (0, 1]")
+    if not 0 < c.continuation_close_position_ratio <= 0.5:
+        raise ConfigError(f"{var('CONTINUATION_CLOSE_POSITION_RATIO')} must be within (0, 0.5]")
+    if c.continuation_max_range_atr_multiple <= 0:
+        raise ConfigError(f"{var('CONTINUATION_MAX_RANGE_ATR_MULTIPLE')} must be positive")
+    if c.continuation_confirmation_tolerance_atr_fraction < 0:
+        raise ConfigError(
+            f"{var('CONTINUATION_CONFIRMATION_TOLERANCE_ATR_FRACTION')} must not be negative"
+        )
+    if c.a_tier_min_net_reward_r <= 0:
+        raise ConfigError(f"{var('A_TIER_MIN_NET_REWARD_R')} must be positive")
 
 
 def load_scalp_config(env: Mapping[str, str] | None = None) -> ModeConfig:

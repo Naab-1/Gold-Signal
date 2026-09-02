@@ -31,6 +31,7 @@ from goldsignal.models.signal import (
 )
 from goldsignal.strategy.base import EvaluationContext, make_signal_id
 from goldsignal.strategy.cost_model import estimate_costs
+from goldsignal.strategy.stop_loss import compute_stop_loss
 from goldsignal.strategy.targets import build_targets, candidate_structure_levels
 from goldsignal.strategy.trace import (
     COOLDOWN_BLOCKED,
@@ -312,22 +313,15 @@ def evaluate_with_trace(
         )
 
     entry_price = entry_candles[-1].close
-    atr_stop = (
-        entry_price - config.atr_stop_multiplier * current_atr
-        if direction == SignalDirection.BUY
-        else entry_price + config.atr_stop_multiplier * current_atr
-    )
     structural_ref = support if direction == SignalDirection.BUY else resistance
-    if direction == SignalDirection.BUY:
-        stop_candidates = [atr_stop]
-        if structural_ref is not None:
-            stop_candidates.append(structural_ref - tolerance)
-        stop_loss = min(stop_candidates)
-    else:
-        stop_candidates = [atr_stop]
-        if structural_ref is not None:
-            stop_candidates.append(structural_ref + tolerance)
-        stop_loss = max(stop_candidates)
+    stop_loss = compute_stop_loss(
+        direction=direction,
+        entry_price=entry_price,
+        atr=current_atr,
+        atr_stop_multiplier=config.atr_stop_multiplier,
+        structural_ref=structural_ref,
+        tolerance=tolerance,
+    )
 
     risk = abs(entry_price - stop_loss)
     if risk <= 0:

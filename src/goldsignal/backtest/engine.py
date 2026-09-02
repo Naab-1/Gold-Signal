@@ -24,10 +24,12 @@ from goldsignal.strategy.trade_management import (
 )
 
 
-def _entry_fill_price(signal: StrategySignal, fill_candle: Candle, config: ModeConfig) -> float:
+def entry_fill_price(signal: StrategySignal, fill_candle: Candle, config: ModeConfig) -> float:
     """Fill at the next candle's open, moved against the trader by half the
     spread plus slippage (transaction cost is applied once at trade close,
-    not as a price-level adjustment).
+    not as a price-level adjustment). Public: shared by the walk-forward
+    engine and the tier-comparison harness (`analysis/tier_comparison.py`),
+    so both simulate fills identically.
     """
     adverse = config.estimated_spread / 2 + config.estimated_slippage
     if signal.direction == SignalDirection.BUY:
@@ -35,7 +37,7 @@ def _entry_fill_price(signal: StrategySignal, fill_candle: Candle, config: ModeC
     return fill_candle.open - adverse
 
 
-def _gapped_through_stop(direction: SignalDirection, fill_price: float, stop_loss: float) -> bool:
+def gapped_through_stop(direction: SignalDirection, fill_price: float, stop_loss: float) -> bool:
     if direction == SignalDirection.BUY:
         return fill_price <= stop_loss
     return fill_price >= stop_loss
@@ -80,8 +82,8 @@ def generate_signals_walk_forward(
 
         if signal.direction != SignalDirection.NO_TRADE:
             fill_candle = entry_candles[i + 1]
-            fill_price = _entry_fill_price(signal, fill_candle, config)
-            gapped = _gapped_through_stop(signal.direction, fill_price, signal.stop_loss)
+            fill_price = entry_fill_price(signal, fill_candle, config)
+            gapped = gapped_through_stop(signal.direction, fill_price, signal.stop_loss)
             opened.append(
                 OpenedTrade(
                     signal=signal,
