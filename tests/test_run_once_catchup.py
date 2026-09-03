@@ -390,3 +390,73 @@ def test_actionable_alert_suppressed_by_default_but_still_recorded(monkeypatch, 
     assert fake_signals.rows[buy_signal.signal_id]["telegram_sent"] is False
     assert len(_mock_telegram["trade"]) == 0
     assert len(_mock_telegram["missed"]) == 0  # not "missed" either -- suppressed, not late
+
+
+def test_skips_fetch_entirely_when_no_new_candle_could_have_closed(monkeypatch):
+    """Root cause of a real production incident: polling every 5 minutes
+    while always fetching fresh candle data, even when nothing new could
+    possibly have closed yet, burned through TwelveData's daily free-tier
+    quota and caused persistent HTTP 429 failures. This proves the fetch
+    is skipped entirely (not just fast) whenever the checkpoint already
+    covers the present moment.
+    """
+    config = load_scalp_config({})
+    strategy = ScriptedStrategy(config, "XAUUSD", {})
+
+    fake_checkpoints = FakeCheckpoints()
+    fake_signals = FakeSignalsRepo()
+    monkeypatch.setattr(run_once_module, "checkpoints_repo", fake_checkpoints)
+    monkeypatch.setattr(run_once_module, "signals_repo", fake_signals)
+
+    settings = _settings()
+    key = run_once_module._checkpoint_key(settings, config, strategy)
+    now = START
+    # Checkpoint already covers "now" -- the next candle can't close for
+    # another 5 minutes, so there's nothing to fetch.
+    fake_checkpoints.store[key] = now
+
+    class ProviderThatMustNotBeCalled:
+        def get_candles(self, instrument, timeframe, start, end):
+            raise AssertionError("get_candles should not be called when nothing new can exist")
+
+    processed = run_once_module._run_catchup(
+        conn=None,
+        settings=settings,
+        config=config,
+        strategy=strategy,
+        provider=ProviderThatMustNotBeCalled(),
+        wall_clock_now=now + timedelta(minutes=1),  # < one entry_timeframe duration later
+    )
+
+    assert processed == 0
+
+
+def test_does_not_skip_once_a_new_candle_could_have_closed(monkeypatch):
+    config = load_scalp_config({})
+    entry, confirm = _candles(config)
+    strategy = ScriptedStrategy(config, "XAUUSD", {})
+
+    fake_checkpoints = FakeCheckpoints()
+    fake_signals = FakeSignalsRepo()
+    monkeypatch.setattr(run_once_module, "checkpoints_repo", fake_checkpoints)
+    monkeypatch.setattr(run_once_module, "signals_repo", fake_signals)
+
+    settings = _settings()
+    key = run_once_module._checkpoint_key(settings, config, strategy)
+    checkpoint = entry[50].timestamp + config.entry_timeframe.duration
+    fake_checkpoints.store[key] = checkpoint
+
+    class FixedProvider:
+        def get_candles(self, instrument, timeframe, start, end):
+            return entry if timeframe == config.entry_timeframe else confirm
+
+    processed = run_once_module._run_catchup(
+        conn=None,
+        settings=settings,
+        config=config,
+        strategy=strategy,
+        provider=FixedProvider(),
+        wall_clock_now=checkpoint + config.entry_timeframe.duration,  # exactly one candle later
+    )
+
+    assert processed == 1

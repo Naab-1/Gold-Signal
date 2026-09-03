@@ -173,6 +173,23 @@ def _run_catchup(
     key = _checkpoint_key(settings, config, strategy)
     checkpoint = checkpoints_repo.get_checkpoint(conn, key)
 
+    if checkpoint is not None:
+        next_possible_close = checkpoint + config.entry_timeframe.duration
+        if next_possible_close > wall_clock_now:
+            # No new candle could have closed since the checkpoint yet --
+            # skip the fetch entirely rather than spending an API call to
+            # confirm what local time arithmetic already proves. This is
+            # what makes frequent polling (e.g. every 5 minutes) cheap for
+            # a mode whose own timeframe is longer (daytrade's M15 candles
+            # only actually need fetching on roughly 1 in 3 such polls).
+            logger.info(
+                "mode=%s next candle can't close until %s (now=%s) -- skipping fetch",
+                strategy.mode.value,
+                next_possible_close.isoformat(),
+                wall_clock_now.isoformat(),
+            )
+            return 0
+
     fetch_anchor = checkpoint if checkpoint is not None else wall_clock_now
     entry_start = fetch_anchor - config.entry_timeframe.duration * DEFAULT_LOOKBACK_CANDLES
     confirm_start = fetch_anchor - config.confirmation_timeframe.duration * DEFAULT_LOOKBACK_CANDLES
