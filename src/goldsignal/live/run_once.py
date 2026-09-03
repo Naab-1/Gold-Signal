@@ -349,7 +349,12 @@ def run_once(mode_key: str) -> None:
         logger.info("mode=%s is disabled, skipping", mode_key)
         return
 
-    provider = get_data_provider(settings)
+    # verify_consistency=False: high-frequency live polling of a small
+    # rolling window would otherwise quadruple request volume (1 bulk +
+    # 3 spot-checks per fetch) for a much smaller risk surface than a bulk
+    # historical pull -- see get_data_provider's docstring. This was a
+    # direct contributor to a real TwelveData rate-limit incident.
+    provider = get_data_provider(settings, verify_consistency=False)
     strategy = strategy_cls(config, settings.instrument)
     wall_clock_now = utc_now()
 

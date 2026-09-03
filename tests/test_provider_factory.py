@@ -24,3 +24,13 @@ def test_factory_rejects_unknown_provider():
     settings = load_global_settings({"GOLDSIGNAL_DATA_PROVIDER": "unknown_vendor"})
     with pytest.raises(ConfigError):
         get_data_provider(settings)
+
+
+def test_verify_consistency_defaults_true_and_can_be_disabled():
+    settings = load_global_settings(
+        {"GOLDSIGNAL_DATA_PROVIDER": "twelvedata", "GOLDSIGNAL_TWELVEDATA_API_KEY": "abc123"}
+    )
+    assert get_data_provider(settings)._verify_consistency_enabled is True
+    assert (
+        get_data_provider(settings, verify_consistency=False)._verify_consistency_enabled is False
+    )
