@@ -1,22 +1,39 @@
 name: Check GoldSignal signals
 
-# GitHub's own `schedule:` cron does not reliably fire every 15 minutes —
-# confirmed in practice (a real ~4h43m gap was observed between two
-# scheduled runs). It's kept below only as a free, best-effort backup.
-# The real, reliable trigger is `repository_dispatch` (type "scan"), fired
-# by an external always-on pinger (see README's "Scheduler reliability"
-# section) at least once every 5 minutes. That pinger is a plain
-# authenticated HTTPS POST to GitHub's dispatches API — any service able
-# to make one can drive this workflow, so the scheduler is fully
+# AUTOMATIC TRIGGERS TEMPORARILY DISABLED (2026-09-03): TwelveData's daily
+# free-tier request quota (800/day) was exhausted by a combination of
+# heavy backtesting and live polling sharing the same API key, causing
+# persistent HTTP 429 failures (and failure-notification emails) on every
+# automatic run regardless of trigger source. The underlying causes are
+# fixed in code (see git history: skip-fetch-when-unnecessary,
+# verify_consistency disabled for live polling) and the daily quota will
+# reset on its own -- there was no way to stop the emails from the
+# cron-job.org side alone, since GitHub's own `schedule:` trigger below
+# would keep firing independently of that external pinger's on/off state.
+#
+# To re-enable once the quota has recovered and you're ready to resume
+# automatic scanning: uncomment the `schedule:` and `repository_dispatch:`
+# blocks below. `workflow_dispatch` (manual trigger, from the Actions tab
+# or `gh workflow run`) is left active so it can still be tested by hand
+# without waiting for either automatic trigger.
+#
+# Normal operation (for reference, once re-enabled): GitHub's own
+# `schedule:` cron does not reliably fire every 15 minutes — confirmed in
+# practice (a real ~4h43m gap was observed between two scheduled runs).
+# It's kept only as a free, best-effort backup. The real, reliable trigger
+# is `repository_dispatch` (type "scan"), fired by an external always-on
+# pinger (see README's "Scheduler reliability" section). That pinger is a
+# plain authenticated HTTPS POST to GitHub's dispatches API — any service
+# able to make one can drive this workflow, so the scheduler is fully
 # replaceable without touching this file. The run_once catch-up logic
 # (persistence.checkpoints_repo) makes it safe for both triggers, or
 # overlapping/duplicate invocations of either, to fire at once: every
 # closed candle is still evaluated and alerted on exactly once.
 on:
-  schedule:
-    - cron: "*/15 * * * *"
-  repository_dispatch:
-    types: [scan]
+  # schedule:
+  #   - cron: "*/15 * * * *"
+  # repository_dispatch:
+  #   types: [scan]
   workflow_dispatch: {}
 
 jobs:
