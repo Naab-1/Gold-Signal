@@ -291,6 +291,51 @@ _BREAKOUTCONTINUATION_MODE_DEFAULTS: dict[str, str] = {
     "ACTIONABLE_ALERTS_ENABLED": "false",
 }
 
+# Breakout and Retest (Phase 4, candidate Family C --
+# docs/phase4_breakout_and_retest.md): same split as Families A/B -- only
+# the generic/shared half lives here; family-specific thresholds live in
+# BreakoutAndRetestConfig (strategy/candidates/breakout_and_retest.py).
+# M15/H1, matching Trend Pullback's slower cadence -- a genuine retest
+# needs room to develop, unlike Breakout Continuation's fast 1-2-candle
+# confirmation.
+_BREAKOUTANDRETEST_MODE_DEFAULTS: dict[str, str] = {
+    "ENABLED": "true",
+    "ENTRY_TIMEFRAME": "M15",
+    "CONFIRMATION_TIMEFRAME": "H1",
+    "EMA_FAST_PERIOD": "20",
+    "EMA_SLOW_PERIOD": "50",
+    "RSI_PERIOD": "14",
+    "RSI_BUY_THRESHOLD": "50",
+    "RSI_SELL_THRESHOLD": "50",
+    "RSI_OVERBOUGHT": "70",
+    "RSI_OVERSOLD": "30",
+    "ATR_PERIOD": "14",
+    "ATR_STOP_MULTIPLIER": "1.5",
+    "STRUCTURE_LOOKBACK": "20",
+    "RETEST_TOLERANCE_ATR_FRACTION": "0.25",
+    "RETEST_CONFIRM_WINDOW": "5",
+    "CHOP_FILTER_ATR_MULTIPLE": "0.5",
+    "TREND_STRENGTH_ATR_MULTIPLE": "1.5",
+    "MIN_NET_REWARD_R": "2.0",
+    "ESTIMATED_SPREAD": "0.30",
+    "ESTIMATED_SLIPPAGE": "0.20",
+    "ESTIMATED_TRANSACTION_COST": "0.0",
+    "COOLDOWN_MINUTES": "60",
+    "MAX_SIGNALS_PER_SESSION": "4",
+    "SETUP_EXPIRATION_CANDLES": "3",
+    "TRADE_MANAGEMENT_PRESET": "balanced",
+    "TP_SHORTFALL_HANDLING": "normalize",
+    "BREAKEVEN_TRIGGER": "none",
+    "BREAKEVEN_AFTER_R_MULTIPLE": "",
+    "CONTINUATION_BREAKOUT_MIN_ATR_MULTIPLE": "0.10",
+    "CONTINUATION_MIN_BODY_RATIO": "0.60",
+    "CONTINUATION_CLOSE_POSITION_RATIO": "0.25",
+    "CONTINUATION_MAX_RANGE_ATR_MULTIPLE": "2.0",
+    "CONTINUATION_CONFIRMATION_TOLERANCE_ATR_FRACTION": "0.10",
+    "A_TIER_MIN_NET_REWARD_R": "1.5",
+    "ACTIONABLE_ALERTS_ENABLED": "false",
+}
+
 
 def _get(env: Mapping[str, str], prefix: str, name: str, defaults: dict[str, str]) -> str:
     # .strip() guards against a stray trailing newline/whitespace from
@@ -607,3 +652,12 @@ def load_breakout_continuation_mode_config(env: Mapping[str, str] | None = None)
     (`strategy/candidates/breakout_continuation.py`), loaded separately.
     """
     return load_mode_config("BREAKOUTCONTINUATION_", _BREAKOUTCONTINUATION_MODE_DEFAULTS, env)
+
+
+def load_breakout_and_retest_mode_config(env: Mapping[str, str] | None = None) -> ModeConfig:
+    """The generic/shared half of Breakout and Retest's config (Phase 4,
+    Family C) -- see `_BREAKOUTANDRETEST_MODE_DEFAULTS`'s module comment.
+    Its own family-specific thresholds are `BreakoutAndRetestConfig`
+    (`strategy/candidates/breakout_and_retest.py`), loaded separately.
+    """
+    return load_mode_config("BREAKOUTANDRETEST_", _BREAKOUTANDRETEST_MODE_DEFAULTS, env)

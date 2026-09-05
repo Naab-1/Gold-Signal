@@ -30,6 +30,7 @@ class StrategyMode(str, Enum):
     # SCALP/DAY_TRADE A+/A-tier baseline, never combined with it.
     TREND_PULLBACK = "TREND_PULLBACK"
     BREAKOUT_CONTINUATION = "BREAKOUT_CONTINUATION"
+    BREAKOUT_AND_RETEST = "BREAKOUT_AND_RETEST"
 
 
 class SignalDirection(str, Enum):
