@@ -29,6 +29,7 @@ class StrategyMode(str, Enum):
     # (see docs/phase4_trend_pullback.md) -- independent of the frozen
     # SCALP/DAY_TRADE A+/A-tier baseline, never combined with it.
     TREND_PULLBACK = "TREND_PULLBACK"
+    BREAKOUT_CONTINUATION = "BREAKOUT_CONTINUATION"
 
 
 class SignalDirection(str, Enum):

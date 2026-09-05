@@ -18,6 +18,7 @@ _MODE_LABELS = {
     StrategyMode.SCALP: "SCALP",
     StrategyMode.DAY_TRADE: "DAY TRADE",
     StrategyMode.TREND_PULLBACK: "TREND PULLBACK",
+    StrategyMode.BREAKOUT_CONTINUATION: "BREAKOUT CONTINUATION",
 }
 _DIRECTION_EMOJI = {
     SignalDirection.BUY: "🟢",
