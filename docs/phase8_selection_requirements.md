@@ -129,9 +129,49 @@ practical to gather.
   standing instruction to present evidence only and never deploy
   without explicit approval.
 
+## Applied to the other three instruments: EUR/USD, GBP/USD, USD/JPY
+
+At the user's request, all five candidates were also run against the
+other three instruments GoldSignal supports, using the same real
+default configurations (with each instrument's own cost profile applied
+via `instruments.py::effective_mode_config`) over a 180-day XAU/USD-
+equivalent window. Full detail is in
+`docs/phase7_other_instruments_180d_results.json`.
+
+**All 15 family/instrument combinations fail selection. None come
+close.** The same pattern seen on gold repeats here: Range Rejection
+and Liquidity Sweep Reversal have adequate trade counts on every
+instrument (142-389 development trades, 28-80 validation trades) and
+are negative in every single case, on all three instruments, in both
+splits, no exceptions. The other three families (Trend Pullback,
+Breakout Continuation, Breakout and Retest) fail purely on sample size
+at this 180-day window (the same issue XAU/USD had before its window
+was extended to 2 years): none of their 9 family/instrument combinations
+reaches even the 30-trade development minimum, the highest being GBP/USD
+Trend Pullback at 28. Their signs bounce inconsistently between
+positive and negative across instruments and between development and
+validation (e.g. EUR/USD Trend Pullback: +0.31R development on 15
+trades, then -1.06R validation on a single trade), exactly what noise
+looks like on samples this small, not evidence of anything either way.
+
+**No family shows any evidence of working on any instrument.** This
+answers the "does this work somewhere else" question directly: no.
+Extending the same 2-year treatment already applied to gold would very
+likely just reconfirm this with tighter numbers, the same way it did
+for XAU/USD's own Trend Pullback and Breakout Continuation results,
+not reverse it, given how consistently negative every well-sampled
+result already is here.
+
+**Nothing is being incorporated for testing.** Since no candidate
+passed selection on any instrument, there is no live or demo alert
+change to make. `actionable_alerts_enabled` remains `False`
+everywhere, per the standing instruction to present evidence only and
+never activate anything without it first passing this gate and then
+receiving explicit approval.
+
 ## Explicitly NOT done in this phase
 
-No final-out-of-sample evaluation for any candidate (none qualified).
-No new real-data fetch (Phase 8 reused Phase 7's existing results). No
-demo forward-testing (Phase 9's job, and moot while nothing has passed
-selection). No live-alert activation.
+No final-out-of-sample evaluation for any candidate (none qualified on
+any instrument). No demo forward-testing (Phase 9's job, and moot while
+nothing has passed selection). No live-alert activation, on any
+instrument, for any family.
