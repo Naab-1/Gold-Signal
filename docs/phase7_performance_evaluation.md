@@ -150,11 +150,81 @@ Full per-family, per-regime, and per-session breakdown is in
 standing default and the user's own instruction not to deploy without
 explicit approval.
 
+## Real-history run, extended window: 2 years, XAU/USD
+
+Phase 8's selection gate (see `docs/phase8_selection_requirements.md`)
+applied to the 180-day result above and failed three of five
+candidates mainly on sample size, not on losing money outright: Trend
+Pullback, Breakout Continuation, and Breakout and Retest simply hadn't
+produced enough trades yet to judge. This run extends the same
+approach to 2 years of XAU/USD history specifically to close that gap.
+
+**Data**: XAU/USD, 730 days ending 2026-09-05, 173,476 M5 candles,
+58,174 M15 candles, 14,605 H1 candles, fetched once per timeframe and
+reused across every family exactly as before. Same real default
+configurations, same regime reference (M15), no optimization. One
+transient TwelveData 429 was hit and handled by the provider's existing
+automatic retry with backoff; the run completed normally afterward.
+TwelveData cost: about 71 requests, still comfortably inside the
+free-tier daily quota.
+
+| Family | Dev trades | Dev expectancy | Val trades | Val expectancy |
+|---|---|---|---|---|
+| Trend Pullback | 99 | -0.1102R | 15 | -0.1721R |
+| Breakout Continuation | 57 | -0.3675R | 15 | -0.3588R |
+| Breakout and Retest | 11 | -0.0490R | 4 | +1.0959R |
+| Range Rejection | 465 | -0.1108R | 86 | -0.3533R |
+| Liquidity Sweep Reversal | 1,586 | -0.0870R | 251 | -0.0724R |
+
+Full detail is in `docs/phase7_cross_family_xauusd_2yr_results.json`.
+
+### What changed, and what this actually resolves
+
+- **Trend Pullback now has an adequate sample (99 development, 15
+  validation, exactly clearing Phase 8's minimum) and both splits are
+  negative.** This resolves the earlier instability head-on: the
+  180-day window showed +0.15R development, the Phase 6 1-year window
+  showed roughly -0.08R to +0.06R development with a suspiciously
+  strong +0.42R to +0.43R validation, and this 2-year window, the
+  largest and most trustworthy sample of the three, lands negative in
+  both splits (-0.11R, -0.17R). With enough data, the earlier positive
+  and mixed readings look like small-sample noise on the way to a
+  fairly consistent negative answer.
+- **Breakout Continuation likewise now clears both minimums (57
+  development, 15 validation) and stays negative in both** (-0.37R,
+  -0.36R), essentially unchanged in direction from the 180-day result,
+  just with a larger, more trustworthy sample behind it now.
+- **Range Rejection and Liquidity Sweep Reversal, already
+  well-sampled at 180 days, remain negative in both splits with much
+  larger samples now** (Range Rejection: 465 development / 86
+  validation trades; Liquidity Sweep Reversal: 1,586 development / 251
+  validation trades). This is reconfirmation, not a new finding, but
+  reconfirmation at this sample size is itself meaningful: these two
+  are consistent, high-confidence losers on this instrument and window,
+  not just unlucky small samples.
+- **Breakout and Retest still cannot be judged.** Even across 2 years
+  it produced only 11 development and 4 validation trades; whatever
+  this family's setup requires is genuinely rare on XAU/USD at M15.
+  Its validation split shows +1.10R, but on 4 trades that number
+  carries no more weight than the 180-day window's own +1.18R on 5
+  trades did. Judging this family at all on this instrument/timeframe
+  would likely need several more years of history than are practical
+  to gather here.
+- **Net effect: four of five candidates now have high-confidence
+  negative results rather than inconclusive ones.** That is a more
+  useful outcome than "not enough data," even though it is not a
+  positive one. Only Breakout and Retest remains genuinely undecided.
+
+**No configuration or candidate from this run has been activated.**
+`actionable_alerts_enabled` remains `False` project-wide, unchanged by
+this run.
+
 ## Explicitly NOT done in this phase
 
-No selection decision (Phase 8's job). No controlled optimization
-applied here (Phase 6's own job, and only run for Trend Pullback so
-far). No comparison across instruments other than XAU/USD. No
-live-alert activation; the standing instruction to present evidence
-only, and never deploy without explicit approval, is unaffected by
-this phase's results.
+No selection decision beyond re-applying Phase 8's existing gate to
+the new numbers (see `docs/phase8_selection_requirements.md`). No
+controlled optimization applied here (Phase 6's own job, and only run
+for Trend Pullback so far, on a different window). No comparison
+across instruments other than XAU/USD. No live-alert activation; the
+standing instruction to present evidence only, and never deploy
+without explicit approval, is unaffected by this phase's results.

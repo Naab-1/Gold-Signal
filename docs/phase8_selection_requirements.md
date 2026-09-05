@@ -86,19 +86,44 @@ inconclusive one. The other three fail primarily on sample size: there
 simply is not enough real history yet in this program's 180-day/1-year
 windows to know whether they have an edge either way.
 
+## Re-applied to a 2-year extended window
+
+Per the sample-size gap identified above, `docs/phase7_performance_evaluation.md`
+was extended with a 2-year XAU/USD run specifically to give Trend
+Pullback and Breakout Continuation enough trades to judge. Re-applying
+the same, unchanged criteria to that result
+(`docs/phase7_cross_family_xauusd_2yr_results.json`):
+
+| Family | Result | Failed criteria |
+|---|---|---|
+| Trend Pullback | FAIL | development expectancy (-0.1102R) not above minimum; validation expectancy (-0.1721R) not above minimum |
+| Breakout Continuation | FAIL | development expectancy (-0.3675R) not above minimum; validation expectancy (-0.3588R) not above minimum |
+| Breakout and Retest | FAIL | development trades (11) below minimum (30); validation trades (4) below minimum (15); development expectancy (-0.0490R) not above minimum |
+| Range Rejection | FAIL | development expectancy (-0.1108R) not above minimum; validation expectancy (-0.3533R) not above minimum |
+| Liquidity Sweep Reversal | FAIL | development expectancy (-0.0870R) not above minimum; validation expectancy (-0.0724R) not above minimum |
+
+**Still all five fail, but the picture is now much clearer.** Trend
+Pullback and Breakout Continuation both now clear the trade-count
+minimums and fail purely on losing money in both splits, the same
+straightforward-loser finding Range Rejection and Liquidity Sweep
+Reversal already had. Only Breakout and Retest still fails on sample
+size; even 2 years of history produced just 11 development and 4
+validation trades, suggesting its setup is rare enough on XAU/USD at
+M15 that judging it here would need substantially more history than is
+practical to gather.
+
 ## What this means, and what it doesn't
 
 - **No candidate is unlocked for a final-out-of-sample evaluation.**
   `backtest/final_oos_ledger.py` has not been touched by this phase.
   Its one-time-only guard remains fully available for whichever, if
   any, candidate eventually passes.
-- **This is not the same finding for every candidate.** Range Rejection
-  and Liquidity Sweep Reversal have real, adequate samples and look
-  like straightforward losers on this data. Trend Pullback, Breakout
-  Continuation, and Breakout and Retest failed mostly on sample size,
-  meaning more real history could plausibly change their outcome
-  (in either direction); the two straightforward losers would need a
-  much larger shift to change theirs.
+- **Four of five candidates are now confidently-sampled losers, not
+  inconclusive results.** Trend Pullback, Breakout Continuation, Range
+  Rejection, and Liquidity Sweep Reversal all have adequate trade
+  counts in both splits and are negative in both. Only Breakout and
+  Retest remains genuinely undecided, and closing that gap would need
+  far more real history than a 2-year window provides.
 - **Nothing has been activated.** `actionable_alerts_enabled` remains
   `False` project-wide, unaffected by this phase's result, per the
   standing instruction to present evidence only and never deploy
