@@ -25,6 +25,10 @@ from goldsignal.utils.time import require_utc
 class StrategyMode(str, Enum):
     SCALP = "SCALP"
     DAY_TRADE = "DAY_TRADE"
+    # STRATEGY RESEARCH AND REPLACEMENT program, Phase 4 candidate families
+    # (see docs/phase4_trend_pullback.md) -- independent of the frozen
+    # SCALP/DAY_TRADE A+/A-tier baseline, never combined with it.
+    TREND_PULLBACK = "TREND_PULLBACK"
 
 
 class SignalDirection(str, Enum):

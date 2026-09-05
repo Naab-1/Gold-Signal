@@ -17,6 +17,7 @@ DISCLAIMER = "Paper-trading/research signal — not financial advice"
 _MODE_LABELS = {
     StrategyMode.SCALP: "SCALP",
     StrategyMode.DAY_TRADE: "DAY TRADE",
+    StrategyMode.TREND_PULLBACK: "TREND PULLBACK",
 }
 _DIRECTION_EMOJI = {
     SignalDirection.BUY: "🟢",
