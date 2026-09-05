@@ -14,8 +14,8 @@ from goldsignal.backtest.models import BacktestSummary, BacktestTrade
 
 
 def to_jsonable(value: Any) -> Any:
-    """Recursively convert dataclasses/Enums/datetimes/lists into plain
-    JSON-serializable values. Public: also reused by
+    """Recursively convert dataclasses/Enums/datetimes/lists/dicts into
+    plain JSON-serializable values. Public: also reused by
     `backtest/final_oos_ledger.py`, so this stays the single source of
     truth for "how does this project turn its result objects into JSON"
     rather than a second copy of the same logic drifting out of sync.
@@ -28,6 +28,8 @@ def to_jsonable(value: Any) -> Any:
         return value.isoformat()
     if isinstance(value, list):
         return [to_jsonable(v) for v in value]
+    if isinstance(value, dict):
+        return {key: to_jsonable(v) for key, v in value.items()}
     return value
 
 

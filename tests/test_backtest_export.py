@@ -7,6 +7,7 @@ from goldsignal.backtest.export import (
     export_summaries_json,
     export_trades_csv,
     export_trades_json,
+    to_jsonable,
 )
 from goldsignal.backtest.metrics import compute_summary
 from goldsignal.backtest.models import BacktestTrade, TargetFill
@@ -83,3 +84,40 @@ def test_export_summaries_json_and_csv(tmp_path):
     with csv_path.open(newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
     assert rows[0]["split_label"] == "development"
+
+
+def test_to_jsonable_recurses_into_dict_values():
+    # A plain dict whose values are dataclasses (e.g. a
+    # `dict[str, BacktestSummary]` regime/session breakdown, as used by
+    # analysis/performance_evaluation.py::CandidateEvaluation) must have
+    # its values converted too, not just be passed through unchanged.
+    summary = compute_summary(
+        [_trade()],
+        strategy_mode=StrategyMode.SCALP,
+        preset=TradeManagementPreset.BALANCED,
+        split_label="development",
+    )
+    payload = to_jsonable({"TRENDING": summary, "RANGING": summary})
+    assert payload["TRENDING"]["strategy_mode"] == "SCALP"
+    assert payload["RANGING"]["total_trades"] == 1
+    # Must actually be JSON-serializable now, not just look right in Python.
+    json.dumps(payload)
+
+
+def test_to_jsonable_handles_nested_dict_inside_a_dataclass_field():
+    from dataclasses import dataclass
+
+    @dataclass(frozen=True)
+    class _Wrapper:
+        by_regime: dict
+
+    summary = compute_summary(
+        [_trade()],
+        strategy_mode=StrategyMode.SCALP,
+        preset=TradeManagementPreset.BALANCED,
+        split_label="development",
+    )
+    wrapper = _Wrapper(by_regime={"TRENDING": summary})
+    payload = to_jsonable(wrapper)
+    json.dumps(payload)  # must not raise
+    assert payload["by_regime"]["TRENDING"]["total_trades"] == 1
