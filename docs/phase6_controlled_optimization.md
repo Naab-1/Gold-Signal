@@ -1,10 +1,11 @@
 # Phase 6: Controlled Optimization
 
-**Status: framework implemented and verified against synthetic data.
-Not yet applied to real history for any candidate family** — consistent
-with every Phase 4/5 deliverable so far: this document specifies the
-optimization framework and proves its mechanics are correct, not a set
-of tuned, evidence-backed parameter choices.
+**Status: framework implemented, verified against synthetic data, and
+now run once against real history** (Trend Pullback, XAU/USD, ~1 year
+of M15/H1 data). The real run's result is reported in full below —
+**it is not a verdict**. Trade counts per split are small (29–67
+development, 7–13 validation), exactly the kind of sample this whole
+program has repeatedly flagged as too thin to trust on its own.
 
 ## What "controlled" means here
 
@@ -95,41 +96,80 @@ already established for walking a strategy forward.
 - Full project test suite (452 tests) and `ruff check`/`ruff format --check` pass.
 - Zero lines changed in any existing file — `analysis/optimization.py` and `tests/test_optimization.py` are both new; every Phase 4 candidate family and the frozen A+/A-tier baseline are completely untouched.
 
-## Why this phase deliberately stops short of a real-history run
+## Real-history run: Trend Pullback, XAU/USD
 
-Unlike Phase 4/5's synthetic-first validation (where synthetic data with
-a known, engineered ground truth is *more* rigorous than real data for
-proving a classifier or strategy's logic is correct), a parameter
-search is only meaningful against real market data — searching a
-stationary random walk for a "better" parameter would be tuning to
-noise and reporting it as if it were evidence. Running this framework
-for real requires pulling a family's development-slice real history
-(one `get_candles` call per instrument/timeframe pair, reused across
-every grid combination — the fetch cost doesn't scale with grid size),
-which spends TwelveData API quota. Given this project's own prior
-production incident from quota exhaustion (`docs/session_checkpoint_2026-09-02.md`
-and this session's earlier rate-limit fix), that pull is deliberately
-left as an explicit, separate next step rather than spent automatically
-in this phase.
+Run via a one-off script (not part of the package, matching the
+project's existing dev-script convention), reusing
+`run_controlled_optimization` exactly as designed — no code changes
+were made to support this run. TwelveData API cost: ~16 requests
+(paginated M15/H1 fetch plus the default consistency spot-checks),
+well inside the free-tier daily quota (52/800 used beforehand).
 
-## Suggested next step (not yet performed)
+**Data**: XAU/USD, ~365 days ending 2026-09-05, 32,970 M15 entry
+candles / 8,250 H1 confirmation candles, split 70/15/15 into
+development/validation/final-out-of-sample internally by
+`run_candidate_dev_validation` (final-oos untouched, per the framework's
+own design).
 
-Run `run_controlled_optimization` for one candidate family (Trend
-Pullback is the natural first choice — it has the most real-data
-history already available in this program, on XAU/USD) against a
-modest real development-slice pull (the same ~90-day scale referenced
-throughout Phase 4's own "sanity check" convention), with a small grid
-over 1-2 of its most impactful fields (e.g.
-`max_extension_atr_multiple`, `trend_strength_atr_multiple`). Report
-whichever configuration is selected — including the honest possibility
-that the baseline wins outright, which would itself be a legitimate,
-informative result given how thin every real edge in this program has
-been so far.
+**Grid**: `trend_strength_atr_multiple` ∈ {0.75, 1.0 (baseline), 1.25}
+× `max_extension_atr_multiple` ∈ {1.0 (baseline), 1.5 (baseline), 2.0}
+— 2 fields, bounded to their immediate neighbors either side of the
+existing default, 5 trials total (baseline + 4 combinations).
+
+| Changed from baseline | Dev trades | Dev expectancy | Val trades | Val expectancy | Penalized score |
+|---|---|---|---|---|---|
+| *(baseline)* | 46 | −0.0792R | 9 | +0.4218R | −0.0792 |
+| trend=0.75, ext=1.0 | 64 | +0.0613R | 13 | +0.4301R | **+0.0213** ← selected |
+| trend=1.25, ext=1.0 | 29 | −0.0845R | 7 | +0.8366R | −0.1245 |
+| trend=0.75, ext=2.0 | 67 | +0.0135R | 13 | +0.4301R | −0.0265 |
+| trend=1.25, ext=2.0 | 30 | −0.1154R | 7 | +0.8366R | −0.1554 |
+
+The framework selected `trend_strength_atr_multiple=0.75`,
+`max_extension_atr_multiple=1.0` over the baseline: its development
+expectancy (+0.0613R) beats the baseline's (−0.0792R) by enough to
+clear both the complexity penalty (2 changed parameters × 0.02 = 0.04)
+and the default `min_improvement_r` margin (0.02). Full per-trial
+detail (every field, not just the two searched) is in
+`docs/phase6_trend_pullback_xauusd_trials.json`.
+
+### Why this is evidence of the framework working, not evidence the rule works
+
+- **46-67 development trades and 7-13 validation trades are small
+  samples.** The project's own earlier real backtests (`docs/baseline_rejection.md`)
+  used 2-year windows specifically because shorter windows didn't
+  produce trade counts anyone could draw a conclusion from; this run
+  used roughly half that history.
+- **The winning margin is thin by construction.** +0.0613R raw
+  development expectancy over 64 trades is close to what could
+  plausibly be noise; the complexity penalty (0.04) very nearly
+  swallows it entirely, which is exactly the "controlled" framework
+  doing its job — not manufacturing false confidence, but it also means
+  this is a marginal result, not a strong one.
+- **Every configuration's validation expectancy is well above its own
+  development expectancy** (e.g. the selected configuration: +0.06R dev
+  vs. +0.43R val) — the opposite of the overfitting pattern this
+  framework mainly guards against (a dev-fit config collapsing on
+  validation), but with samples this small (9-13 validation trades) it
+  is at least as likely to reflect a handful of favorable trades in a
+  short recent window as a genuine, persistent edge. It is not treated
+  here as confirmation of anything.
+- **This is the first real-history run for any Phase 4 candidate in
+  this entire program.** One instrument, one family, one grid. It does
+  not generalize to XAU/USD's other candidates, to the other three
+  instruments, or establish that Trend Pullback has a real edge —
+  exactly the same caution every prior phase in this program has
+  applied to its own real-data findings.
+
+**No configuration from this run has been activated.** `actionable_alerts_enabled`
+remains `False` project-wide, per Phase 1's standing default and the
+user's own instruction not to deploy without explicit approval.
 
 ## Explicitly NOT done in this phase
 
-No real-history optimization run for any family. No comparison across
-candidate families (Phase 7's job). No selection-requirements gate
-applied (Phase 8). No live-alert activation — the standing instruction
-to present evidence only, and never deploy without explicit approval,
-is unaffected by this phase existing.
+Real-history optimization run for only one family/instrument/grid — the
+other four candidates and three instruments remain unoptimized. No
+comparison across candidate families (Phase 7's job). No
+selection-requirements gate applied (Phase 8). No live-alert
+activation — the standing instruction to present evidence only, and
+never deploy without explicit approval, is unaffected by this phase's
+results.
